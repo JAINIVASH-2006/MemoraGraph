@@ -39,6 +39,34 @@ logging.basicConfig(
 logger = logging.getLogger("memoragraph")
 
 
+async def auto_seed_default_users():
+    """Auto seed default users if database is empty."""
+    import uuid
+    from app.models.database import get_session
+    from app.models.user import User, UserRole
+    from app.security.auth import hash_password
+    from sqlalchemy import select, func
+    
+    try:
+        session_gen = get_session()
+        async for session in session_gen:
+            result = await session.execute(select(func.count(User.id)))
+            count = result.scalar()
+            if count == 0:
+                logger.info("Database empty. Auto-seeding default system users...")
+                default_users = [
+                    User(id=str(uuid.uuid4()), email="admin@memoragraph.com", hashed_password=hash_password("memoragraph"), name="Admin User", role=UserRole.ADMIN, is_active=True),
+                    User(id=str(uuid.uuid4()), email="manager@memoragraph.com", hashed_password=hash_password("memoragraph"), name="Arun Manager", role=UserRole.MANAGER, is_active=True),
+                    User(id=str(uuid.uuid4()), email="employee@memoragraph.com", hashed_password=hash_password("memoragraph"), name="Karthik Developer", role=UserRole.EMPLOYEE, is_active=True),
+                ]
+                session.add_all(default_users)
+                await session.commit()
+                logger.info("Auto-seeded default users successfully.")
+            break
+    except Exception as e:
+        logger.warning("Could not auto-seed default users: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown events."""
@@ -49,6 +77,7 @@ async def lifespan(app: FastAPI):
     # 1. Initialize databases
     init_db(settings.database_url)
     await create_tables()
+    await auto_seed_default_users()
 
     init_vector_store(
         url=settings.qdrant_url,
