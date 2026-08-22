@@ -1,0 +1,68 @@
+graph TD
+    %% Define Styling
+    classDef frontend fill:#4F46E5,stroke:#312E81,stroke-width:2px,color:#fff;
+    classDef backend fill:#10B981,stroke:#064E3B,stroke-width:2px,color:#fff;
+    classDef database fill:#F59E0B,stroke:#78350F,stroke-width:2px,color:#fff;
+    classDef process fill:#6366F1,stroke:#3730A3,stroke-width:2px,color:#fff;
+    classDef model fill:#8B5CF6,stroke:#4C1D95,stroke-width:2px,color:#fff;
+
+    %% Ingestion Pipeline
+    subgraph Ingestion_Pipeline ["DOCUMENT INGESTION & KNOWLEDGE EXTRACTION"]
+        Doc[Upload PDF/DOCX/TXT] --> Text[Text Extraction & Semantic Chunking]
+        Text --> Meta[Metadata Extraction]
+        Text --> Entities[Entity & Relationship Extraction]
+    end
+    class Doc,Text,Meta,Entities process;
+
+    %% Retrieval & Generation Pipeline
+    subgraph Retrieval_Generation ["INTENT-ROUTED GRAPH RAG GENERATION"]
+        Query[User Query] --> Intent[Intent Classifier]
+        Intent -->|Classify Intent| AllowedRels[Allowed Relationships]
+        Query -->|Embed Query| Embed[bge-small-en-v1.5]
+        Embed -->|Vector Search| QdrantSeed[Qdrant Seed Retrieval]
+        
+        QdrantSeed -->|Seed Entities| Neo4jRouter[Neo4j Directed Edge-Routing]
+        AllowedRels -->|Filter Edges| Neo4jRouter
+        
+        QdrantSeed -->|Raw Chunks| Validator[Context Validation & Token Budgeting]
+        Neo4jRouter -->|Graph Paths| Validator
+        
+        Validator -->|Deduplicated Evidence| LLM[Grounded LLM Generator]
+        LLM -->|Grounded Answer + Citations| Response[Response Package]
+    end
+    class Query,Intent,AllowedRels,Embed,QdrantSeed,Neo4jRouter,Validator,LLM,Response process;
+
+    %% Databases
+    subgraph Storage ["SYSTEM DATABASES"]
+        Postgres[(PostgreSQL)]
+        QdrantDB[(Qdrant Vector DB)]
+        Neo4jDB[(Neo4j Graph DB)]
+    end
+    class Postgres,QdrantDB,Neo4jDB database;
+
+    %% Frontend & API Entry
+    subgraph Client ["USER INTERFACE"]
+        UI[React / Vite Frontend]
+        FastAPI[FastAPI Backend Server]
+        Auth[JWT Authentication]
+    end
+    class UI frontend;
+    class FastAPI,Auth backend;
+
+    %% External Connections
+    UI <-->|HTTP/REST| FastAPI
+    FastAPI <-->|Auth Check| Auth
+    
+    %% Ingestion storage flows
+    Meta -->|Metadata & Document Chunks| Postgres
+    Entities -->|Nodes & Edges| Neo4jDB
+    Text -->|Embed & Store Vectors| QdrantDB
+
+    %% Retrieval storage flows
+    QdrantSeed <--> QdrantDB
+    Neo4jRouter <--> Neo4jDB
+    FastAPI --> Query
+    Response --> UI
+    
+    %% PostgreSQL logging
+    Response -->|Query History & User Feedback| Postgres

@@ -1,0 +1,97 @@
+version: "3.8"
+
+services:
+  # --- Frontend ---
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - memoragraph
+
+  # --- Backend ---
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - neo4j
+      - qdrant
+    volumes:
+      - ./data:/app/data
+    networks:
+      - memoragraph
+
+  # --- PostgreSQL ---
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: memoragraph
+      POSTGRES_PASSWORD: memoragraph
+      POSTGRES_DB: memoragraph
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - memoragraph
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memoragraph"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Neo4j ---
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/memoragraph
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - memoragraph
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Qdrant ---
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - memoragraph
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  qdrant_data:
+
+networks:
+  memoragraph:
+    driver: bridge

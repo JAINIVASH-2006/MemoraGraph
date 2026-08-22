@@ -1,0 +1,53 @@
+# MemoraGraph
+
+## Dependencies
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+venv/
+.venv/
+env/
+
+## Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+## Environment
+.env
+.env.local
+.env.*.local
+
+## IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+## Data
+data/documents/*
+data/processed/*
+data/evaluation/*
+!data/documents/.gitkeep
+!data/processed/.gitkeep
+!data/evaluation/.gitkeep
+
+## Build
+frontend/dist/
+*.log
+
+## Docker
+docker-compose.override.yml
+
+## Test cache
+.pytest_cache/
