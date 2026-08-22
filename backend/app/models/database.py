@@ -20,14 +20,25 @@ _async_session_factory = None
 
 def init_db(database_url: str) -> None:
     """Initialize the async database engine and session factory."""
+    import ssl as ssl_module
+    from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+
     global _engine, _async_session_factory
 
     # asyncpg does not understand 'sslmode' query param (used by Neon, etc.)
-    # Strip it and pass ssl via connect_args instead.
+    # Strip it from URL and pass ssl context via connect_args instead.
     connect_args = {}
     if "sslmode=" in database_url:
-        database_url = database_url.split("?sslmode=")[0] if "?sslmode=" in database_url else database_url.replace("&sslmode=require", "")
-        connect_args["ssl"] = "require"
+        parsed = urlparse(database_url)
+        query_params = parse_qs(parsed.query)
+        query_params.pop("sslmode", None)
+        new_query = urlencode(query_params, doseq=True)
+        database_url = urlunparse(parsed._replace(query=new_query))
+        # Create a proper SSL context for asyncpg
+        ssl_ctx = ssl_module.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl_module.CERT_NONE
+        connect_args["ssl"] = ssl_ctx
 
     _engine = create_async_engine(
         database_url,
