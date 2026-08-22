@@ -21,12 +21,21 @@ _async_session_factory = None
 def init_db(database_url: str) -> None:
     """Initialize the async database engine and session factory."""
     global _engine, _async_session_factory
+
+    # asyncpg does not understand 'sslmode' query param (used by Neon, etc.)
+    # Strip it and pass ssl via connect_args instead.
+    connect_args = {}
+    if "sslmode=" in database_url:
+        database_url = database_url.split("?sslmode=")[0] if "?sslmode=" in database_url else database_url.replace("&sslmode=require", "")
+        connect_args["ssl"] = "require"
+
     _engine = create_async_engine(
         database_url,
         echo=False,
         pool_size=10,
         max_overflow=20,
         pool_pre_ping=True,
+        connect_args=connect_args,
     )
     _async_session_factory = async_sessionmaker(
         bind=_engine,
