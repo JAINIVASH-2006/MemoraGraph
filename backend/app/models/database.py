@@ -25,6 +25,22 @@ def init_db(database_url: str) -> None:
 
     global _engine, _async_session_factory
 
+    # Log redacted URL to help debug connection string issues
+    try:
+        parsed = urlparse(database_url)
+        netloc = parsed.netloc
+        if "@" in netloc:
+            creds, host_port = netloc.split("@", 1)
+            if ":" in creds:
+                user, _ = creds.split(":", 1)
+                netloc = f"{user}:****@{host_port}"
+            else:
+                netloc = f"{creds}:****@{host_port}"
+        redacted = urlunparse(parsed._replace(netloc=netloc))
+        logger.info("Initializing database with URL: %s", redacted)
+    except Exception as e:
+        logger.warning("Could not log redacted database URL: %s", e)
+
     # asyncpg does not understand 'sslmode' query param (used by Neon, etc.)
     # Strip it from URL and pass ssl context via connect_args instead.
     connect_args = {}
