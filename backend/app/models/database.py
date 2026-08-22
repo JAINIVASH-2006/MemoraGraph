@@ -25,9 +25,32 @@ def init_db(database_url: str) -> None:
 
     global _engine, _async_session_factory
 
+    # 1. Enforce asyncpg driver scheme even if user forgets it in Render config
+    parsed = urlparse(database_url)
+    scheme = parsed.scheme
+    if scheme == "postgresql":
+        scheme = "postgresql+asyncpg"
+        parsed = parsed._replace(scheme=scheme)
+
+    # 2. Strip 'sslmode' query param which asyncpg doesn't support
+    query_params = parse_qs(parsed.query)
+    query_params.pop("sslmode", None)
+    new_query = urlencode(query_params, doseq=True)
+    parsed = parsed._replace(query=new_query)
+
+    # 3. Enable SSL context for remote database connections (like Neon)
+    connect_args = {}
+    host = parsed.hostname
+    if host and host not in ("localhost", "127.0.0.1", "backend", "postgres"):
+        ssl_ctx = ssl_module.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl_module.CERT_NONE
+        connect_args["ssl"] = ssl_ctx
+
+    database_url = urlunparse(parsed)
+
     # Log redacted URL to help debug connection string issues
     try:
-        parsed = urlparse(database_url)
         netloc = parsed.netloc
         if "@" in netloc:
             creds, host_port = netloc.split("@", 1)
@@ -40,21 +63,6 @@ def init_db(database_url: str) -> None:
         logger.info("Initializing database with URL: %s", redacted)
     except Exception as e:
         logger.warning("Could not log redacted database URL: %s", e)
-
-    # asyncpg does not understand 'sslmode' query param (used by Neon, etc.)
-    # Strip it from URL and pass ssl context via connect_args instead.
-    connect_args = {}
-    if "sslmode=" in database_url:
-        parsed = urlparse(database_url)
-        query_params = parse_qs(parsed.query)
-        query_params.pop("sslmode", None)
-        new_query = urlencode(query_params, doseq=True)
-        database_url = urlunparse(parsed._replace(query=new_query))
-        # Create a proper SSL context for asyncpg
-        ssl_ctx = ssl_module.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl_module.CERT_NONE
-        connect_args["ssl"] = ssl_ctx
 
     _engine = create_async_engine(
         database_url,
