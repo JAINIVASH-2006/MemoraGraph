@@ -16,19 +16,29 @@ _encoder_instance: Optional["EmbeddingEncoder"] = None
 
 class EmbeddingEncoder:
     """
-    Wraps sentence-transformers SentenceTransformer.
-    Loaded once at startup and reused for all requests.
+    Wraps sentence-transformers / fastembed.
+    Loaded lazily on first encode request to keep RAM usage tiny at startup.
     """
 
     def __init__(self, model_name: str):
-        logger.info("Loading embedding model: %s", model_name)
-        from sentence_transformers import SentenceTransformer
         self.model_name = model_name
-        self._model = SentenceTransformer(model_name)
-        self.dimension = self._model.get_sentence_embedding_dimension()
-        logger.info(
-            "Embedding model loaded. Dimension: %d", self.dimension
-        )
+        self._model = None
+        self.dimension = 384  # Default dimension for bge-small-en-v1.5
+
+    def _ensure_model(self):
+        if self._model is None:
+            logger.info("Lazily loading embedding model: %s", self.model_name)
+            try:
+                from fastembed import TextEmbedding
+                self._model = TextEmbedding(model_name=self.model_name)
+                self._use_fastembed = True
+                logger.info("FastEmbed loaded successfully.")
+            except Exception:
+                from sentence_transformers import SentenceTransformer
+                self._model = SentenceTransformer(self.model_name)
+                self._use_fastembed = False
+                self.dimension = self._model.get_sentence_embedding_dimension()
+                logger.info("SentenceTransformer loaded successfully. Dimension: %d", self.dimension)
 
     def encode(
         self,
@@ -49,6 +59,12 @@ class EmbeddingEncoder:
         """
         if not texts:
             return []
+
+        self._ensure_model()
+
+        if getattr(self, "_use_fastembed", False):
+            embeddings = list(self._model.embed(texts))
+            return [emb.tolist() for emb in embeddings]
 
         embeddings = self._model.encode(
             texts,

@@ -69,13 +69,8 @@ async def lifespan(app: FastAPI):
         model=settings.llm_model,
     )
 
-    # 3. Initialize sentence embeddings model
+    # 3. Register sentence embeddings model (lazy loads on first request)
     init_encoder(model_name=settings.embedding_model)
-
-    # 4. Initialize intent classifier prototypes (pre-computes embeddings)
-    # Run in executor to avoid blocking startup event loop
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, get_intent_classifier)
 
     yield
     
