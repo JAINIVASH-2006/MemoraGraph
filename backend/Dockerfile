@@ -9,12 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch CPU-only first to keep memory footprint under 512MB
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-
 # Copy requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Pre-download default FastEmbed model to bake it into the image and avoid runtime downloads
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='BAAI/bge-small-en-v1.5')"
 
 # Copy application source code
 COPY . .

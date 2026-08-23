@@ -67,6 +67,32 @@ async def auto_seed_default_users():
         logger.warning("Could not auto-seed default users: %s", e)
 
 
+async def cleanup_stuck_documents():
+    """Reset any documents stuck in PROCESSING status to FAILED on startup."""
+    from app.models.database import get_session
+    from app.models.document import Document, DocumentStatus
+    from sqlalchemy import update
+    
+    try:
+        session_gen = get_session()
+        async for session in session_gen:
+            stmt = (
+                update(Document)
+                .where(Document.status == DocumentStatus.PROCESSING)
+                .values(
+                    status=DocumentStatus.FAILED,
+                    error_message="System restarted or crashed during processing."
+                )
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            if result.rowcount > 0:
+                logger.info("Reset %d stuck PROCESSING documents to FAILED status.", result.rowcount)
+            break
+    except Exception as e:
+        logger.warning("Could not cleanup stuck documents: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown events."""
@@ -78,6 +104,7 @@ async def lifespan(app: FastAPI):
     init_db(settings.database_url)
     await create_tables()
     await auto_seed_default_users()
+    await cleanup_stuck_documents()
 
     init_vector_store(
         url=settings.qdrant_url,
