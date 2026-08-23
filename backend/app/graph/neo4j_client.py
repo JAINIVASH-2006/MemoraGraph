@@ -70,7 +70,7 @@ class Neo4jClient:
         self,
         cypher: str,
         parameters: Optional[dict] = None,
-        database: str = "neo4j",
+        database: Optional[str] = None,
     ) -> list[dict]:
         """
         Execute a Cypher query and return results as a list of dicts.
@@ -84,7 +84,7 @@ class Neo4jClient:
         self,
         cypher: str,
         parameters: Optional[dict] = None,
-        database: str = "neo4j",
+        database: Optional[str] = None,
     ) -> list[dict]:
         """Execute a write transaction."""
         def _tx(tx):
