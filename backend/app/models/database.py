@@ -84,11 +84,18 @@ def init_db(database_url: str) -> None:
 
 async def create_tables() -> None:
     """Create all tables defined in the ORM models."""
+    from sqlalchemy import text
     global _engine
     if _engine is None:
         raise RuntimeError("Database engine not initialized. Call init_db() first.")
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Self-healing migration to increase column width for chunk_id
+        try:
+            await conn.execute(text("ALTER TABLE query_sources ALTER COLUMN chunk_id TYPE VARCHAR(100)"))
+            logger.info("Migrated query_sources.chunk_id column length to 100.")
+        except Exception as e:
+            logger.debug("query_sources.chunk_id migration skipped or failed: %s", e)
     logger.info("Database tables created/verified.")
 
 

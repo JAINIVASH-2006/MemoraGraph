@@ -74,7 +74,7 @@ class QdrantVectorStore(VectorStore):
 
     async def ensure_collection(self, dimension: int) -> None:
         """Create the collection if it does not exist."""
-        from qdrant_client.models import Distance, VectorParams
+        from qdrant_client.models import Distance, VectorParams, PayloadSchemaType
         
         existing = self._client.get_collections().collections
         names = [c.name for c in existing]
@@ -87,6 +87,17 @@ class QdrantVectorStore(VectorStore):
             logger.info("Created Qdrant collection: %s (dim=%d)", self.collection, dimension)
         else:
             logger.debug("Qdrant collection already exists: %s", self.collection)
+            
+        # Ensure payload index for document_id exists (required by Qdrant Cloud for deletion/filtering)
+        try:
+            self._client.create_payload_index(
+                collection_name=self.collection,
+                field_name="document_id",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            logger.info("Verified/Created Qdrant payload index for document_id.")
+        except Exception as e:
+            logger.debug("Skipped Qdrant payload index creation: %s", e)
 
     async def upsert_chunks(self, chunks: list[VectorChunk]) -> int:
         """Upsert a batch of chunks into Qdrant."""

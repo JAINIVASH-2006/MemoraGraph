@@ -77,7 +77,7 @@ class QuerySource(Base):
         String(36), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
     )
     document_name: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    chunk_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    chunk_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     chunk_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     relevance_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     source_type: Mapped[str] = mapped_column(String(50), default="vector", nullable=False)
