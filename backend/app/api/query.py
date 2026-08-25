@@ -37,8 +37,10 @@ async def ask_question(
     logger.info("Received query: '%s'", body.query)
     generator = get_answer_generator()
     
-    # Run the full pipeline
-    response = await generator.generate_answer(body.query, top_k=body.top_k)
+    # Run the full pipeline with user isolation
+    from app.models.user import UserRole
+    target_user_id = current_user.id if current_user and current_user.role != UserRole.ADMIN else None
+    response = await generator.generate_answer(body.query, top_k=body.top_k, user_id=target_user_id)
 
     user_id = current_user.id if current_user else None
 
@@ -101,9 +103,9 @@ async def get_query_history(
     session: AsyncSession = Depends(get_session),
 ) -> list[QueryHistoryItem]:
     """Retrieve history of past queries for the logged-in user."""
-    # Admins/Managers can see all queries, Employees see only their own
+    from app.models.user import UserRole
     stmt = select(Query)
-    if current_user.role.value == "EMPLOYEE":
+    if current_user.role != UserRole.ADMIN:
         stmt = stmt.where(Query.user_id == current_user.id)
     
     stmt = stmt.order_by(desc(Query.created_at)).offset(offset).limit(limit)

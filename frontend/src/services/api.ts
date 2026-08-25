@@ -72,13 +72,38 @@ export const register = async (email: string, password: string, name: string, ro
   return response.data;
 };
 
+export const firebaseLoginSync = async (firebaseIdToken: string, name?: string, role?: string): Promise<AuthResponse> => {
+  localStorage.setItem('memoragraph_token', firebaseIdToken);
+  try {
+    const response = await api.post<AuthResponse>('/api/auth/firebase-sync', { id_token: firebaseIdToken, name, role });
+    if (response.data.access_token) {
+      localStorage.setItem('memoragraph_token', response.data.access_token);
+    }
+    return response.data;
+  } catch (err) {
+    // If backend doesn't need additional token exchange, continue with firebaseIdToken
+    return {
+      access_token: firebaseIdToken,
+      token_type: 'bearer',
+      expires_in: 3600,
+      user: { id: 'firebase-user', email: '', name: name || 'User', role: (role as any) || 'EMPLOYEE' }
+    };
+  }
+};
+
 export const getMe = async (): Promise<User> => {
   const response = await api.get<User>('/api/auth/me');
   return response.data;
 };
 
-export const logout = () => {
+export const logout = async () => {
   localStorage.removeItem('memoragraph_token');
+  try {
+    const { firebaseLogout } = await import('./firebase');
+    await firebaseLogout();
+  } catch {
+    // ignore
+  }
   window.location.href = '/login';
 };
 

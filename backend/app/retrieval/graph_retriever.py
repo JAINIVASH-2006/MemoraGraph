@@ -6,7 +6,7 @@ restricted to intent-allowed relationship types.
 """
 
 import logging
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Optional
 
 from app.graph.neo4j_client import get_neo4j
 from app.schemas.query import GraphPath, GraphNode, GraphEdge
@@ -25,19 +25,19 @@ class GraphRetriever:
         seed_entity_names: List[str],
         allowed_relationships: List[str],
         max_hops: int = 2,
+        user_id: Optional[str] = None,
     ) -> List[GraphPath]:
         """
         Search for paths starting from entities matching seed_entity_names.
-        Constrained by allowed_relationships.
+        Constrained by allowed_relationships and user isolation.
         """
         if not seed_entity_names:
             return []
 
         # Find matching starting nodes in Neo4j
-        # We search matching seed names (case-insensitive)
         seed_nodes = []
         for name in seed_entity_names:
-            matches = self._neo4j.search_entities(name, limit=2)
+            matches = self._neo4j.search_entities(name, limit=2, user_id=user_id)
             seed_nodes.extend(matches)
 
         if not seed_nodes:
@@ -47,22 +47,27 @@ class GraphRetriever:
         seed_ids = [n["id"] for n in seed_nodes]
         
         # Build Cypher path matching query
-        # If allowed_relationships is empty, allow all relationship types
         if allowed_relationships:
             rel_filter = "|".join(allowed_relationships)
             rel_pattern = f"-[r:{rel_filter}*1..{max_hops}]-"
         else:
             rel_pattern = f"-[r*1..{max_hops}]-"
 
+        user_filter = "AND (startNode.user_id = $user_id OR startNode.user_id IS NULL) AND (endNode.user_id = $user_id OR endNode.user_id IS NULL) " if user_id else ""
+        params = {"seed_ids": seed_ids}
+        if user_id:
+            params["user_id"] = user_id
+
         cypher = (
             f"MATCH path = (startNode){rel_pattern}(endNode) "
             f"WHERE startNode.id IN $seed_ids AND startNode <> endNode "
+            f"{user_filter}"
             f"RETURN path, relationships(path) as rels, nodes(path) as ns "
             f"LIMIT 15"
         )
 
         try:
-            results = self._neo4j.execute_query(cypher, {"seed_ids": seed_ids})
+            results = self._neo4j.execute_query(cypher, params)
             paths = []
 
             for record in results:

@@ -32,9 +32,10 @@ def init_db(database_url: str) -> None:
         scheme = "postgresql+asyncpg"
         parsed = parsed._replace(scheme=scheme)
 
-    # 2. Strip 'sslmode' query param which asyncpg doesn't support
+    # 2. Strip unsupported query params for asyncpg (e.g. sslmode, channel_binding, etc.)
     query_params = parse_qs(parsed.query)
-    query_params.pop("sslmode", None)
+    for param in ["sslmode", "channel_binding", "ssl", "target_session_attrs", "gssencmode"]:
+        query_params.pop(param, None)
     new_query = urlencode(query_params, doseq=True)
     parsed = parsed._replace(query=new_query)
 
@@ -90,12 +91,16 @@ async def create_tables() -> None:
         raise RuntimeError("Database engine not initialized. Call init_db() first.")
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Self-healing migration to increase column width for chunk_id
-        try:
-            await conn.execute(text("ALTER TABLE query_sources ALTER COLUMN chunk_id TYPE VARCHAR(100)"))
-            logger.info("Migrated query_sources.chunk_id column length to 100.")
-        except Exception as e:
-            logger.debug("query_sources.chunk_id migration skipped or failed: %s", e)
+        # Self-healing migration to increase column widths for chunk_ids
+        for alter_sql in [
+            "ALTER TABLE query_sources ALTER COLUMN chunk_id TYPE VARCHAR(100)",
+            "ALTER TABLE document_chunks ALTER COLUMN id TYPE VARCHAR(100)",
+            "ALTER TABLE document_chunks ALTER COLUMN embedding_id TYPE VARCHAR(100)",
+        ]:
+            try:
+                await conn.execute(text(alter_sql))
+            except Exception as e:
+                logger.debug("Migration sql skipped or failed (%s): %s", alter_sql, e)
     logger.info("Database tables created/verified.")
 
 

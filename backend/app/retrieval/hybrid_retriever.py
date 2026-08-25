@@ -11,7 +11,7 @@ Orchestrates the entire MemoraGraph retrieval workflow:
 
 import logging
 import time
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 from app.embeddings.encoder import get_encoder
 from app.embeddings.vector_store import get_vector_store, VectorSearchResult
@@ -34,14 +34,15 @@ class HybridRetriever:
         self,
         query: str,
         top_k: int = 5,
+        user_id: Optional[str] = None,
     ) -> Tuple[List[Source], List[GraphPath], IntentResult]:
         """
-        Run the hybrid MemoraGraph retrieval pipeline.
+        Run the hybrid MemoraGraph retrieval pipeline with user isolation.
         
         Returns:
             (sources, graph_paths, intent_result)
         """
-        logger.info("Starting hybrid retrieval for query: '%s'", query)
+        logger.info("Starting hybrid retrieval for query: '%s' (user_id=%s)", query, user_id)
 
         # 1. Intent Classification
         classifier = get_intent_classifier()
@@ -52,6 +53,7 @@ class HybridRetriever:
         vector_results: List[VectorSearchResult] = await self._vector_store.search(
             query_embedding=query_emb,
             top_k=top_k,
+            filter_user_id=user_id,
         )
 
         sources = [
@@ -76,10 +78,9 @@ class HybridRetriever:
                 seed_entity_names=seed_names,
                 allowed_relationships=intent_res.allowed_relationships,
                 max_hops=2,
+                user_id=user_id,
             )
 
-        # Add graph paths as sources to provide context
-        # Extract unique node names and properties to append to final context
         return sources, graph_paths, intent_res
 
     def _extract_seed_entity_candidates(

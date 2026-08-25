@@ -115,6 +115,8 @@ class QdrantVectorStore(VectorStore):
                     "document_id": chunk.document_id,
                     "document_name": chunk.document_name,
                     "text": chunk.text,
+                    "user_id": chunk.metadata.get("user_id") or chunk.metadata.get("uploaded_by") or "",
+                    "uploaded_by": chunk.metadata.get("uploaded_by") or chunk.metadata.get("user_id") or "",
                     "filename": chunk.metadata.get("filename") or chunk.document_name or "",
                     "title": chunk.metadata.get("title") or chunk.document_name or "",
                     "author": chunk.metadata.get("author") or "",
@@ -136,15 +138,18 @@ class QdrantVectorStore(VectorStore):
         query_embedding: list[float],
         top_k: int = 5,
         filter_document_id: Optional[str] = None,
+        filter_user_id: Optional[str] = None,
     ) -> list[VectorSearchResult]:
-        """Perform approximate nearest-neighbor search."""
+        """Perform approximate nearest-neighbor search with user isolation."""
         from qdrant_client.models import Filter, FieldCondition, MatchValue
         
-        search_filter = None
+        must_conditions = []
         if filter_document_id:
-            search_filter = Filter(
-                must=[FieldCondition(key="document_id", match=MatchValue(value=filter_document_id))]
-            )
+            must_conditions.append(FieldCondition(key="document_id", match=MatchValue(value=filter_document_id)))
+        if filter_user_id:
+            must_conditions.append(FieldCondition(key="user_id", match=MatchValue(value=filter_user_id)))
+        
+        search_filter = Filter(must=must_conditions) if must_conditions else None
         
         response = self._client.query_points(
             collection_name=self.collection,

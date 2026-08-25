@@ -24,33 +24,25 @@ class GraphBuilder:
         document_id: str,
         document_name: str,
         chunk_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> tuple[int, int]:
         """
-        Write entities and relationships to Neo4j.
-        
-        Args:
-            extraction: {"entities": [...], "relationships": [...]}
-            document_id: PostgreSQL document ID for linking
-            document_name: Human-readable document name
-            chunk_id: Optional chunk ID for fine-grained provenance
-        
-        Returns:
-            (entities_created, relationships_created)
+        Write entities and relationships to Neo4j with user scoping.
         """
         entities = extraction.get("entities", [])
         relationships = extraction.get("relationships", [])
 
         # Ensure the Document node exists
-        self._neo4j.merge_node(
-            "Document",
-            document_id,
-            {"name": document_name, "document_id": document_id},
-        )
+        doc_props = {"name": document_name, "document_id": document_id}
+        if user_id:
+            doc_props["user_id"] = user_id
+            doc_props["uploaded_by"] = user_id
+
+        self._neo4j.merge_node("Document", document_id, doc_props)
 
         entities_created = 0
         for ent in entities:
             try:
-                # Include document and chunk provenance directly on node properties
                 props = {
                     "name": ent["name"],
                     "source_document_id": document_id,
@@ -58,16 +50,19 @@ class GraphBuilder:
                 }
                 if chunk_id:
                     props["source_chunk_id"] = chunk_id
+                if user_id:
+                    props["user_id"] = user_id
 
                 self._neo4j.merge_node(ent["type"], ent["id"], props)
                 
-                # Link entity to source document with provenance on the relationship
                 rel_props = {
                     "source_document_id": document_id,
                     "created_at": int(time.time() * 1000),
                 }
                 if chunk_id:
                     rel_props["source_chunk_id"] = chunk_id
+                if user_id:
+                    rel_props["user_id"] = user_id
 
                 self._neo4j.merge_relationship(
                     ent["type"], ent["id"],
@@ -82,7 +77,6 @@ class GraphBuilder:
         relationships_created = 0
         for rel in relationships:
             try:
-                # Find the entity types from our entities list
                 from_ent = next((e for e in entities if e["id"] == rel["from_id"]), None)
                 to_ent = next((e for e in entities if e["id"] == rel["to_id"]), None)
                 
@@ -95,6 +89,8 @@ class GraphBuilder:
                 }
                 if chunk_id:
                     rel_props["source_chunk_id"] = chunk_id
+                if user_id:
+                    rel_props["user_id"] = user_id
 
                 self._neo4j.merge_relationship(
                     from_ent["type"], rel["from_id"],

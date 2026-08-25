@@ -42,7 +42,7 @@ async def upload_document(
     file: UploadFile = File(...),
     department: Optional[str] = Form(None),
     project: Optional[str] = Form(None),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> UploadResponse:
     """
@@ -130,9 +130,13 @@ async def list_documents(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> DocumentListResponse:
-    """List documents with pagination, search, and status filters."""
+    """List documents with pagination, search, status filters, and user isolation."""
     offset = (page - 1) * page_size
     stmt = select(Document)
+
+    # Per-user isolation: regular users only see documents they uploaded
+    if current_user.role != UserRole.ADMIN:
+        stmt = stmt.where(Document.uploaded_by == current_user.id)
 
     # Apply search filter
     if query:
@@ -170,18 +174,23 @@ async def get_document(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> DocumentOut:
-    """Retrieve metadata of a single document."""
+    """Retrieve metadata of a single document, enforcing ownership check."""
     result = await session.execute(select(Document).where(Document.id == id))
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
+    
+    # Ownership verification
+    if current_user.role != UserRole.ADMIN and doc.uploaded_by != current_user.id:
+        raise HTTPException(status_code=404, detail="Document not found.")
+        
     return DocumentOut.model_validate(doc)
 
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(
     id: str,
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Delete document, its chunks, vectors, and graph annotations."""
@@ -189,6 +198,12 @@ async def delete_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
+
+    if current_user.role != UserRole.ADMIN and doc.uploaded_by != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to delete this document.",
+        )
 
     logger.info("Deleting document: %s (id=%s)", doc.name, id)
 

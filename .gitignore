@@ -38,6 +38,9 @@ Thumbs.db
 data/documents/*
 data/processed/*
 data/evaluation/*
+backend/data/documents/*
+!backend/data/documents/synthetic/
+!backend/data/documents/synthetic/*
 !data/documents/.gitkeep
 !data/processed/.gitkeep
 !data/evaluation/.gitkeep

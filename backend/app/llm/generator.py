@@ -49,13 +49,15 @@ class GroundedAnswerGenerator:
         self,
         query: str,
         top_k: int = 5,
+        user_id: Optional[str] = None,
     ) -> QueryResponse:
         """
-        Run the complete intent-routed Graph RAG pipeline.
+        Run the complete intent-routed Graph RAG pipeline with user isolation.
         
         Args:
             query: User's query
             top_k: Number of vector chunks to retrieve
+            user_id: Optional user ID for tenant isolation
             
         Returns:
             QueryResponse schema containing answer, citations, and pipeline metrics.
@@ -82,20 +84,25 @@ class GroundedAnswerGenerator:
         encoder = get_encoder()
         query_emb = encoder.encode_single(query)
         vector_store = get_vector_store()
-        vector_results = await vector_store.search(query_embedding=query_emb, top_k=top_k)
+        vector_results = await vector_store.search(
+            query_embedding=query_emb,
+            top_k=top_k,
+            filter_user_id=user_id,
+        )
         vector_latency = (time.perf_counter() - start_vector) * 1000
 
         # Extract entry seeds using retriever candidates heuristic
         seed_names = self._retriever._extract_seed_entity_candidates(query, vector_results)
 
-        # 3. Directed Graph Traversal
+        # 3. Directed graph traversal from seeds
         start_graph = time.perf_counter()
         graph_paths = []
         if seed_names:
             graph_paths = self._graph_retriever.retrieve_paths(
                 seed_entity_names=seed_names,
                 allowed_relationships=allowed_rels,
-                max_hops=2
+                max_hops=2,
+                user_id=user_id,
             )
         graph_latency = (time.perf_counter() - start_graph) * 1000
 

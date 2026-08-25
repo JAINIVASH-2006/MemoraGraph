@@ -35,11 +35,14 @@ class Neo4jClient:
                     self._uri,
                     auth=(self._username, self._password),
                     max_connection_pool_size=20,
+                    connection_timeout=5.0,
+                    connection_acquisition_timeout=5.0,
+                    max_transaction_retry_time=3.0,
                 )
                 logger.info("Neo4j client initialized. URI: %s", self._uri)
         except Exception as e:
-            logger.error("Failed to establish Neo4j connection: %s", e)
-            raise
+            logger.warning("Failed to establish Neo4j driver connection: %s", e)
+            self._driver = None
 
     def close(self) -> None:
         """Close the Neo4j driver connection."""
@@ -52,15 +55,24 @@ class Neo4jClient:
                 logger.warning("Error closing Neo4j connection: %s", e)
 
     def verify_connection(self) -> bool:
-        """Verify the Neo4j driver connectivity."""
+        """Verify the Neo4j driver connectivity with auto-reconnection."""
         try:
             if not self._driver:
                 self.connect()
-            self._driver.verify_connectivity()
-            return True
+            if self._driver:
+                self._driver.verify_connectivity()
+                return True
         except Exception as e:
-            logger.warning("Neo4j connection verification failed: %s", e)
-            return False
+            logger.warning("Neo4j connection verification failed: %s. Attempting reconnection...", e)
+            try:
+                self.close()
+                self.connect()
+                if self._driver:
+                    self._driver.verify_connectivity()
+                    return True
+            except Exception as retry_err:
+                logger.warning("Neo4j reconnection retry failed: %s", retry_err)
+        return False
 
     async def ping(self) -> bool:
         """Test Neo4j connectivity (async wrapper)."""
@@ -76,9 +88,18 @@ class Neo4jClient:
         Execute a Cypher query and return results as a list of dicts.
         Runs synchronously (Neo4j sync driver).
         """
-        with self._driver.session(database=database) as session:
-            result = session.run(cypher, parameters or {})
-            return [dict(record) for record in result]
+        if not self._driver:
+            self.connect()
+        if not self._driver:
+            logger.warning("Cannot execute query: Neo4j driver is not connected.")
+            return []
+        try:
+            with self._driver.session(database=database) as session:
+                result = session.run(cypher, parameters or {})
+                return [dict(record) for record in result]
+        except Exception as e:
+            logger.warning("Neo4j execute_query error: %s (query: %s)", e, cypher)
+            return []
 
     def execute_write(
         self,
@@ -87,12 +108,21 @@ class Neo4jClient:
         database: Optional[str] = None,
     ) -> list[dict]:
         """Execute a write transaction."""
-        def _tx(tx):
-            result = tx.run(cypher, parameters or {})
-            return [dict(record) for record in result]
-        
-        with self._driver.session(database=database) as session:
-            return session.execute_write(_tx)
+        if not self._driver:
+            self.connect()
+        if not self._driver:
+            logger.warning("Cannot execute write: Neo4j driver is not connected.")
+            return []
+        try:
+            def _tx(tx):
+                result = tx.run(cypher, parameters or {})
+                return [dict(record) for record in result]
+            
+            with self._driver.session(database=database) as session:
+                return session.execute_write(_tx)
+        except Exception as e:
+            logger.warning("Neo4j execute_write error: %s (query: %s)", e, cypher)
+            return []
 
     def ensure_constraints(self) -> None:
         """Create uniqueness constraints for all node types."""
@@ -165,27 +195,32 @@ class Neo4jClient:
         node_id: str,
         allowed_rel_types: Optional[list[str]] = None,
         max_hops: int = 1,
+        user_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """
-        Get neighboring nodes constrained by relationship types.
-        
-        This is the core of MemoraGraph directed edge-routing:
-        only traverses relationships in allowed_rel_types.
+        Get neighboring nodes constrained by relationship types and optional user isolation.
         """
         if allowed_rel_types:
             rel_filter = "|".join(allowed_rel_types)
             rel_pattern = f"[r:{rel_filter}]"
         else:
             rel_pattern = "[r]"
+
+        user_filter = ""
+        params = {"node_id": node_id}
+        if user_id:
+            user_filter = "AND (start.user_id = $user_id OR start.user_id IS NULL) AND (neighbor.user_id = $user_id OR neighbor.user_id IS NULL) "
+            params["user_id"] = user_id
         
         cypher = (
             f"MATCH (start {{id: $node_id}})-{rel_pattern}-(neighbor) "
+            f"WHERE true {user_filter}"
             f"RETURN start, neighbor, r, type(r) as rel_type, "
             f"labels(start) as start_types, labels(neighbor) as neighbor_types "
             f"LIMIT 50"
         )
         
-        results = self.execute_query(cypher, {"node_id": node_id})
+        results = self.execute_query(cypher, params)
         
         nodes = {}
         edges = []
@@ -209,22 +244,34 @@ class Neo4jClient:
         
         return {"nodes": list(nodes.values()), "edges": edges}
 
-    def search_entities(self, query: str, node_types: Optional[list[str]] = None, limit: int = 10) -> list[dict]:
-        """Full-text-like search on entity names."""
+    def search_entities(
+        self,
+        query: str,
+        node_types: Optional[list[str]] = None,
+        limit: int = 10,
+        user_id: Optional[str] = None,
+    ) -> list[dict]:
+        """Full-text search on entity names with user scoping."""
         if node_types:
             type_filter = "|".join(node_types)
             label_match = f"(n:{type_filter})"
         else:
             label_match = "(n)"
+
+        user_clause = ""
+        params = {"query": query, "limit": limit}
+        if user_id:
+            user_clause = "AND (n.user_id = $user_id OR n.user_id IS NULL) "
+            params["user_id"] = user_id
         
         cypher = (
             f"MATCH {label_match} "
-            f"WHERE toLower(n.name) CONTAINS toLower($query) "
-            f"OR toLower(n.id) CONTAINS toLower($query) "
+            f"WHERE (toLower(n.name) CONTAINS toLower($query) OR toLower(n.id) CONTAINS toLower($query)) "
+            f"{user_clause}"
             f"RETURN n, labels(n) as types "
             f"LIMIT $limit"
         )
-        results = self.execute_query(cypher, {"query": query, "limit": limit})
+        results = self.execute_query(cypher, params)
         nodes = []
         for r in results:
             node = dict(r["n"])
@@ -232,15 +279,19 @@ class Neo4jClient:
             nodes.append(node)
         return nodes
 
-    def get_stats(self) -> dict:
-        """Get count statistics for nodes and relationships."""
+    def get_stats(self, user_id: Optional[str] = None) -> dict:
+        """Get count statistics for nodes and relationships with optional user filtering."""
         try:
-            node_result = self.execute_query("MATCH (n) RETURN count(n) as total_nodes")
-            rel_result = self.execute_query("MATCH ()-[r]->() RETURN count(r) as total_rels")
+            where_clause = "WHERE (n.user_id = $user_id OR n.user_id IS NULL)" if user_id else ""
+            params = {"user_id": user_id} if user_id else {}
+
+            node_result = self.execute_query(f"MATCH (n) {where_clause} RETURN count(n) as total_nodes", params)
+            rel_result = self.execute_query(f"MATCH ()-[r]->() RETURN count(r) as total_rels")
             
             # Per-type counts
             type_result = self.execute_query(
-                "MATCH (n) RETURN labels(n)[0] as label, count(n) as cnt ORDER BY cnt DESC"
+                f"MATCH (n) {where_clause} RETURN labels(n)[0] as label, count(n) as cnt ORDER BY cnt DESC",
+                params
             )
             
             return {

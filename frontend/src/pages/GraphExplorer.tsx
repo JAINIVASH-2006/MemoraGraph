@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { FormEvent } from 'react';
 import { ReactFlow, MiniMap, Controls, Background, useNodesState, useEdgesState, type Node, type Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -99,12 +99,33 @@ export default function GraphExplorer() {
     }
   }, [setNodes, setEdges]);
 
+  // Live debounced search
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await searchGraphEntities(searchQuery.trim());
+        setSearchResults(res.entities);
+      } catch (err) {
+        console.error('Search failed:', err);
+      } finally {
+        setLoading(false);
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   const handleSearch = async (e: FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
     setLoading(true);
     try {
-      const res = await searchGraphEntities(searchQuery);
+      const res = await searchGraphEntities(searchQuery.trim());
       setSearchResults(res.entities);
     } catch (err) {
       console.error('Search failed:', err);
@@ -132,6 +153,16 @@ export default function GraphExplorer() {
     }
   };
 
+  const starterEntities: GraphNode[] = [
+    { id: 'project-alpha', label: 'Project Alpha', type: 'Project', properties: { status: 'Active' } },
+    { id: 'arun', label: 'Arun', type: 'Employee', properties: { role: 'Project Manager' } },
+    { id: 'engineering', label: 'Engineering', type: 'Department', properties: {} },
+    { id: 'security-risk', label: 'Security Risk', type: 'Risk', properties: { severity: 'Critical' } },
+    { id: 'cloud-migration-decision', label: 'Cloud Migration Decision', type: 'Decision', properties: {} },
+    { id: 'karthik', label: 'Karthik', type: 'Employee', properties: { role: 'Developer' } },
+    { id: 'project-beta', label: 'Project Beta', type: 'Project', properties: { status: 'Planning' } },
+  ];
+
   return (
     <div className="page flex flex-row h-[calc(100vh-80px)] p-0">
       {/* Search and Node Info sidebar */}
@@ -157,28 +188,52 @@ export default function GraphExplorer() {
           </form>
         </div>
 
-        {/* Search Results list */}
+        {/* Search Results list & Quick Starters */}
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
           {loading && (
-            <div className="flex justify-center items-center py-10 gap-2 text-[var(--color-text-muted)] text-xs">
+            <div className="flex justify-center items-center py-6 gap-2 text-[var(--color-text-muted)] text-xs">
               <Loader className="animate-spin" size={14} />
               Searching database...
             </div>
           )}
-          
-          {searchResults.map((entity) => (
-            <button
-              key={entity.id}
-              onClick={() => selectSeedNode(entity)}
-              className="w-full p-2 bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-card-hover)] border border-[var(--color-border)] hover:border-violet-600 rounded text-left text-xs transition duration-200 flex justify-between items-center"
-            >
-              <div>
-                <span className="text-[10px] uppercase font-bold text-violet-400 block">{entity.type}</span>
-                <span className="text-[var(--color-text-primary)] font-semibold">{entity.label}</span>
-              </div>
-              <Sparkles size={12} className="text-[var(--color-text-muted)]" />
-            </button>
-          ))}
+
+          {searchResults.length > 0 && (
+            <div className="space-y-1.5 mb-3">
+              <span className="text-[10px] uppercase font-bold text-[var(--color-text-muted)] tracking-wider">Search Results ({searchResults.length})</span>
+              {searchResults.map((entity) => (
+                <button
+                  key={entity.id}
+                  onClick={() => selectSeedNode(entity)}
+                  className="w-full p-2 bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-card-hover)] border border-[var(--color-border)] hover:border-violet-600 rounded text-left text-xs transition duration-200 flex justify-between items-center cursor-pointer"
+                >
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-violet-400 block">{entity.type}</span>
+                    <span className="text-[var(--color-text-primary)] font-semibold">{entity.label}</span>
+                  </div>
+                  <Sparkles size={12} className="text-[var(--color-text-muted)]" />
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!searchQuery.trim() && (
+            <div className="space-y-1.5">
+              <span className="text-[10px] uppercase font-bold text-[var(--color-text-muted)] tracking-wider">Suggested Entities</span>
+              {starterEntities.map((entity) => (
+                <button
+                  key={entity.id}
+                  onClick={() => selectSeedNode(entity)}
+                  className="w-full p-2 bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-card-hover)] border border-[var(--color-border)] hover:border-violet-600 rounded text-left text-xs transition duration-200 flex justify-between items-center cursor-pointer"
+                >
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-violet-400 block">{entity.type}</span>
+                    <span className="text-[var(--color-text-primary)] font-semibold">{entity.label}</span>
+                  </div>
+                  <Sparkles size={12} className="text-violet-400 opacity-60" />
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Selected Node Properties Panel */}
           {selectedNode && (

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.graph.neo4j_client import get_neo4j
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.security.auth import get_current_user
 from app.schemas.query import GraphNode, GraphEdge
 
@@ -72,8 +72,9 @@ async def get_neighbors(
     if allowed_relations:
         rel_list = [r.strip() for r in allowed_relations.split(",") if r.strip()]
 
-    # Retrieve from Neo4j client
-    graph_data = neo4j.get_neighbors(node_id=id, allowed_rel_types=rel_list)
+    # Retrieve from Neo4j client with user scoping
+    user_id = current_user.id if current_user.role != UserRole.ADMIN else None
+    graph_data = neo4j.get_neighbors(node_id=id, allowed_rel_types=rel_list, user_id=user_id)
 
     nodes = []
     for n in graph_data["nodes"]:
@@ -116,15 +117,20 @@ class GraphStatsResponse(BaseModel):
     technologies: int
 
 
+class GraphSearchRequest(BaseModel):
+    query: str
+    node_types: Optional[List[str]] = None
+
+
 @router.post("/search", response_model=GraphSearchResponse)
 async def search_graph_entities(
-    query: str,
-    node_types: Optional[List[str]] = None,
+    req: GraphSearchRequest,
     current_user: User = Depends(get_current_user),
 ) -> GraphSearchResponse:
-    """Search for matching nodes in the Neo4j knowledge graph."""
+    """Search for matching nodes in the Neo4j knowledge graph with user isolation."""
     neo4j = get_neo4j()
-    nodes = neo4j.search_entities(query=query, node_types=node_types)
+    user_id = current_user.id if current_user.role != UserRole.ADMIN else None
+    nodes = neo4j.search_entities(query=req.query, node_types=req.node_types, user_id=user_id)
     
     # Exclude document nodes if they are present or filter properly
     response_nodes = []
@@ -148,9 +154,10 @@ async def search_graph_entities(
 async def get_graph_stats(
     current_user: User = Depends(get_current_user),
 ) -> GraphStatsResponse:
-    """Retrieve count statistics from the Neo4j knowledge graph."""
+    """Retrieve count statistics from the Neo4j knowledge graph with user isolation."""
     neo4j = get_neo4j()
-    stats = neo4j.get_stats()
+    user_id = current_user.id if current_user.role != UserRole.ADMIN else None
+    stats = neo4j.get_stats(user_id=user_id)
     node_counts = stats.get("node_counts", {})
     
     return GraphStatsResponse(

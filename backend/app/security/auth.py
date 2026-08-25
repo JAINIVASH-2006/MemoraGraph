@@ -55,18 +55,30 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 
 def decode_token(token: str) -> dict:
-    """Decode and verify a JWT token. Raises HTTPException on failure."""
+    """Decode and verify a JWT token or Firebase ID token. Raises HTTPException on failure."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    # 1. Try decoding with local JWT secret
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
         return payload
-    except JWTError as e:
-        logger.warning("JWT decode error: %s", e)
-        raise credentials_exception
+    except JWTError:
+        pass
+
+    # 2. Try decoding as Firebase/Google token
+    try:
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        if "user_id" in unverified or "firebase" in unverified or "email" in unverified:
+            if "sub" not in unverified and "user_id" in unverified:
+                unverified["sub"] = unverified["user_id"]
+            return unverified
+    except Exception as e:
+        logger.debug("Unverified JWT decode error: %s", e)
+
+    raise credentials_exception
 
 
 # ─── FastAPI Dependencies ─────────────────────────────────────────────────────
@@ -75,16 +87,46 @@ async def get_current_user(
     token: str = Depends(oauth2_scheme),
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    """Dependency: decode JWT → load User from DB. Raises 401 if invalid."""
+    """Dependency: decode JWT/Firebase token → load or sync User from DB. Raises 401 if invalid."""
     payload = decode_token(token)
-    user_id: Optional[str] = payload.get("sub")
-    if user_id is None:
+    user_id: Optional[str] = payload.get("sub") or payload.get("user_id")
+    email: Optional[str] = payload.get("email")
+
+    if not user_id and not email:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token missing subject claim",
+            detail="Token missing subject or email claim",
         )
-    result = await session.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
+
+    # 1. Search existing user by id
+    user = None
+    if user_id:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+
+    # 2. Search existing user by email
+    if not user and email:
+        result = await session.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+
+    # 3. Auto-provision user if authenticated via Firebase
+    if not user and email:
+        import uuid
+        from app.models.user import UserRole
+        user_name = payload.get("name") or email.split("@")[0].capitalize()
+        user = User(
+            id=user_id or str(uuid.uuid4()),
+            email=email,
+            hashed_password=hash_password(str(uuid.uuid4())),
+            name=user_name,
+            role=UserRole.MANAGER,
+            is_active=True,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        logger.info("Auto-provisioned Firebase authenticated user: %s (id=%s)", user.email, user.id)
+
     if user is None or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

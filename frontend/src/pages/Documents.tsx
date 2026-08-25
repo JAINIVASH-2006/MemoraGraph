@@ -30,6 +30,18 @@ export default function Documents() {
 
   useEffect(() => { fetchDocs(); }, [query]);
 
+  // Auto-refresh when documents are PROCESSING or UPLOADED
+  useEffect(() => {
+    const isBusy = docs.some((d) => d.status === 'PROCESSING' || d.status === 'UPLOADED');
+    if (!isBusy) return;
+
+    const timer = setInterval(() => {
+      fetchDocs();
+    }, 2500);
+
+    return () => clearInterval(timer);
+  }, [docs]);
+
   const handleUpload = async (e: FormEvent) => {
     e.preventDefault();
     if (!file) return;

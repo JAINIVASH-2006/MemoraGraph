@@ -97,6 +97,11 @@ async def _run_pipeline(
             chunk_id = f"{doc.id}-c{i}"
             embedding = embeddings[i]
             
+            chunk_meta = dict(chunk.metadata or {})
+            if doc.uploaded_by:
+                chunk_meta["user_id"] = doc.uploaded_by
+                chunk_meta["uploaded_by"] = doc.uploaded_by
+
             # Save to PostgreSQL
             db_chunk = DocumentChunk(
                 id=chunk_id,
@@ -107,7 +112,7 @@ async def _run_pipeline(
                 char_end=chunk.char_end,
                 token_count=chunk.token_count,
                 embedding_id=chunk_id,
-                chunk_metadata=chunk.metadata,
+                chunk_metadata=chunk_meta,
             )
             db_session.add(db_chunk)
 
@@ -119,57 +124,69 @@ async def _run_pipeline(
                     document_name=doc.name,
                     text=chunk.text,
                     embedding=embedding,
-                    metadata=chunk.metadata,
+                    metadata=chunk_meta,
                 )
             )
 
         await db_session.flush()
         
         # Ensure collection and upsert to Qdrant
-        await vector_store.ensure_collection(encoder.dimension)
-        await vector_store.upsert_chunks(vector_chunks)
+        try:
+            await vector_store.ensure_collection(encoder.dimension)
+            await vector_store.upsert_chunks(vector_chunks)
+        except Exception as q_err:
+            logger.warning("Failed to store chunks in Qdrant vector store: %s", q_err)
 
-        # 7. Extract entities and relationships using LLM
-        # Perform extraction on the first few chunks or full text sample to capture graph structure
-        # To avoid massive API usage, we limit graph extraction to the first 4 chunks
-        # or combine key portions of the text. Let's do up to 4 chunks of extraction.
-        # 7. Verify Neo4j and Ingest Graph Elements
-        neo4j_client = get_neo4j()
-        if not neo4j_client.verify_connection():
-            raise RuntimeError("Neo4j database connection verification failed. Aborting document ingestion.")
-            
-        graph_builder = GraphBuilder(neo4j_client)
-        
+        # 7. Extract entities and relationships using LLM and Ingest into Neo4j
         total_entities = 0
         total_rels = 0
-        
-        # Ensure Neo4j uniqueness constraints exist
-        neo4j_client.ensure_constraints()
 
-        # Extract graph elements chunk-by-chunk for local context in parallel
-        max_extract_chunks = min(5, len(chunks))
-        
-        logger.info("Extracting entities and relationships concurrently for %d chunks", max_extract_chunks)
-        extraction_tasks = [
-            extract_entities_and_relationships(
-                text=chunks[i].text,
-                document_name=doc.name,
-            )
-            for i in range(max_extract_chunks)
-        ]
-        
-        extractions = await asyncio.gather(*extraction_tasks)
-        
-        for i, extraction in enumerate(extractions):
-            chunk_id = f"{doc.id}-c{i}"
-            ent_cnt, rel_cnt = graph_builder.ingest_extraction(
-                extraction=extraction,
-                document_id=doc.id,
-                document_name=doc.name,
-                chunk_id=chunk_id,
-            )
-            total_entities += ent_cnt
-            total_rels += rel_cnt
+        neo4j_connected = False
+        try:
+            neo4j_client = get_neo4j()
+            if neo4j_client and neo4j_client.verify_connection():
+                neo4j_connected = True
+            else:
+                logger.warning(
+                    "Neo4j database connection verification failed. Document will be indexed for text/vector retrieval, but graph entity extraction will be skipped."
+                )
+        except Exception as neo_err:
+            logger.warning("Neo4j client check encountered an error: %s", neo_err)
+
+        if neo4j_connected:
+            try:
+                graph_builder = GraphBuilder(neo4j_client)
+                
+                # Ensure Neo4j uniqueness constraints exist
+                neo4j_client.ensure_constraints()
+
+                # Extract graph elements chunk-by-chunk for local context in parallel
+                max_extract_chunks = min(5, len(chunks))
+                
+                logger.info("Extracting entities and relationships concurrently for %d chunks", max_extract_chunks)
+                extraction_tasks = [
+                    extract_entities_and_relationships(
+                        text=chunks[i].text,
+                        document_name=doc.name,
+                    )
+                    for i in range(max_extract_chunks)
+                ]
+                
+                extractions = await asyncio.gather(*extraction_tasks)
+                
+                for i, extraction in enumerate(extractions):
+                    chunk_id = f"{doc.id}-c{i}"
+                    ent_cnt, rel_cnt = graph_builder.ingest_extraction(
+                        extraction=extraction,
+                        document_id=doc.id,
+                        document_name=doc.name,
+                        chunk_id=chunk_id,
+                        user_id=doc.uploaded_by,
+                    )
+                    total_entities += ent_cnt
+                    total_rels += rel_cnt
+            except Exception as graph_err:
+                logger.warning("Graph extraction/ingestion encountered an issue: %s", graph_err)
 
         # Update stats and complete
         doc.entity_count = total_entities
@@ -186,7 +203,7 @@ async def _run_pipeline(
     except Exception as e:
         logger.exception("Document processing failed for document: %s", doc.name)
         # Update status to FAILED and record error message
-        db_session.rollback()
+        await db_session.rollback()
         # Re-fetch document to avoid stale session state
         result = await db_session.execute(select(Document).where(Document.id == document_id))
         failed_doc = result.scalar_one_or_none()

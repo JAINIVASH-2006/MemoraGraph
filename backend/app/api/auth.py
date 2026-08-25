@@ -132,3 +132,63 @@ async def change_password(
     user = result.scalar_one()
     user.hashed_password = hash_password(body.new_password)
     logger.info("Password changed for user: %s", user.email)
+
+
+from pydantic import BaseModel
+from typing import Optional
+
+class FirebaseSyncRequest(BaseModel):
+    id_token: str
+    name: Optional[str] = None
+    role: Optional[str] = "EMPLOYEE"
+
+
+@router.post("/firebase-sync", response_model=TokenResponse)
+async def sync_firebase_user(
+    body: FirebaseSyncRequest,
+    session: AsyncSession = Depends(get_session),
+) -> TokenResponse:
+    """Sync a user authenticated via Firebase and return a local access token."""
+    from app.security.auth import decode_token
+    payload = decode_token(body.id_token)
+    email = payload.get("email")
+    user_id = payload.get("sub") or payload.get("user_id")
+
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Firebase token does not contain a valid email address.",
+        )
+
+    result = await session.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        try:
+            role = UserRole(body.role.upper() if body.role else "EMPLOYEE")
+        except ValueError:
+            role = UserRole.EMPLOYEE
+
+        user_name = body.name or payload.get("name") or email.split("@")[0].capitalize()
+        user = User(
+            id=user_id or str(uuid.uuid4()),
+            email=email,
+            hashed_password=hash_password(str(uuid.uuid4())),
+            name=user_name,
+            role=role,
+            is_active=True,
+        )
+        session.add(user)
+        await session.flush()
+        logger.info("Created new user from Firebase: %s", user.email)
+
+    token = create_access_token(
+        data={"sub": user.id, "email": user.email, "role": user.role.value},
+        expires_delta=timedelta(minutes=settings.jwt_expiration_minutes),
+    )
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in=settings.jwt_expiration_minutes * 60,
+        user=UserOut.model_validate(user),
+    )
