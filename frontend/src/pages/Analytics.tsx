@@ -26,6 +26,7 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
+import defaultEvalReport from '../data/defaultEvaluationReport.json';
 import { getAnalyticsOverview, getEvaluationReport } from '../services/api';
 import type { AnalyticsOverview, EvaluationReport } from '../types';
 
@@ -33,7 +34,7 @@ const COLORS = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b'];
 
 export default function Analytics() {
   const [data, setData] = useState<AnalyticsOverview | null>(null);
-  const [evalData, setEvalData] = useState<EvaluationReport | null>(null);
+  const [evalData, setEvalData] = useState<EvaluationReport>(defaultEvalReport as EvaluationReport);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -49,7 +50,9 @@ export default function Analytics() {
     ])
       .then(([overview, evaluation]) => {
         if (overview) setData(overview);
-        if (evaluation) setEvalData(evaluation);
+        if (evaluation && evaluation.metrics && Object.keys(evaluation.metrics).length > 0) {
+          setEvalData(evaluation);
+        }
       })
       .finally(() => setLoading(false));
   }, []);

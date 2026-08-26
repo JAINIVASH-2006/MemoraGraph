@@ -154,6 +154,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:5000",
         "https://memoragraph.vercel.app",
+        "https://memora-graph.vercel.app",
         "*",  # support broad dev environments
     ],
     allow_credentials=True,

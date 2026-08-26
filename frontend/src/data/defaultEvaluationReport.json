@@ -1,0 +1,55 @@
+{
+  "dataset_type": "SYNTHETIC_DEVELOPMENT_DATA",
+  "total_samples_evaluated": 5,
+  "metrics": {
+    "Precision@1": {
+      "mean": 0.8,
+      "std": 0.4,
+      "ci_95": [
+        0.4,
+        1.0
+      ]
+    },
+    "Precision@5": {
+      "mean": 0.28,
+      "std": 0.098,
+      "ci_95": [
+        0.2,
+        0.36
+      ]
+    },
+    "PathPrecision@5": {
+      "mean": 0.0,
+      "std": 0.0,
+      "ci_95": [
+        0.0,
+        0.0
+      ]
+    },
+    "AnswerRecall": {
+      "mean": 0.6133,
+      "std": 0.3804,
+      "ci_95": [
+        0.28,
+        0.9333
+      ]
+    },
+    "IntentAccuracy": {
+      "mean": 1.0,
+      "std": 0.0,
+      "ci_95": [
+        1.0,
+        1.0
+      ]
+    },
+    "Latency_ms": {
+      "mean": 241.8912,
+      "std": 268.3156,
+      "ci_95": [
+        98.9353,
+        512.5929
+      ]
+    }
+  },
+  "evaluation_timestamp": "2026-08-21 13:44:50"
+}
