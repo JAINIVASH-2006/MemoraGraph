@@ -92,3 +92,26 @@ export interface TimelineEvent {
   entity_type: string;
   entity_id: string;
 }
+
+export interface MetricStat {
+  mean: number;
+  std: number;
+  ci_95: [number, number];
+}
+
+export interface EvaluationReport {
+  available?: boolean;
+  message?: string;
+  dataset_type?: string;
+  total_samples_evaluated?: number;
+  metrics?: {
+    'Precision@1'?: MetricStat;
+    'Precision@5'?: MetricStat;
+    'PathPrecision@5'?: MetricStat;
+    'AnswerRecall'?: MetricStat;
+    'IntentAccuracy'?: MetricStat;
+    'Latency_ms'?: MetricStat;
+    [key: string]: MetricStat | undefined;
+  };
+  evaluation_timestamp?: string;
+}

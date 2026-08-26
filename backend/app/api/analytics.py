@@ -120,3 +120,33 @@ async def get_timeline(
         logger.warning("Could not fetch Event nodes from Neo4j: %s", e)
 
     return events
+
+
+@router.get("/analytics/evaluation")
+async def get_evaluation_report(
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Retrieve the latest academic RAG evaluation benchmark report."""
+    import json
+    import os
+
+    candidates = [
+        os.path.join(os.getcwd(), "data", "evaluation", "latest_evaluation_report.json"),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "evaluation", "latest_evaluation_report.json")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "evaluation", "latest_evaluation_report.json")),
+    ]
+
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    data["available"] = True
+                    return data
+            except Exception as e:
+                logger.error("Failed to read evaluation report at %s: %s", path, e)
+
+    return {
+        "available": False,
+        "message": "Evaluation data not available. Run 'python scripts/evaluate.py' to generate metrics.",
+    }

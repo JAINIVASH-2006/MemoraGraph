@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { User, Document, QueryResult, GraphNode, GraphEdge, TimelineEvent, AnalyticsOverview } from '../types';
+import type { User, Document, QueryResult, GraphNode, GraphEdge, TimelineEvent, AnalyticsOverview, EvaluationReport } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || window.location.origin;
 
@@ -199,6 +199,11 @@ export const getTimeline = async (): Promise<TimelineEvent[]> => {
 
 export const getAnalyticsOverview = async (): Promise<AnalyticsOverview> => {
   const response = await api.get<AnalyticsOverview>('/api/analytics/overview');
+  return response.data;
+};
+
+export const getEvaluationReport = async (): Promise<EvaluationReport> => {
+  const response = await api.get<EvaluationReport>('/api/analytics/evaluation');
   return response.data;
 };
 
