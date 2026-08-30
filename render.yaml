@@ -1,0 +1,56 @@
+﻿services:
+  - type: web
+    name: memoragraph-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    envVars:
+      - key: APP_NAME
+        value: MemoraGraph
+      - key: APP_VERSION
+        value: 0.1.0
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DATABASE_URL
+        fromDatabase:
+          name: memoragraph-db
+          property: connectionString
+      - key: NEO4J_URI
+        value: "neo4j+s://7e6922f4.databases.neo4j.io"
+      - key: NEO4J_USERNAME
+        value: neo4j
+      - key: NEO4J_PASSWORD
+        value: "Nac4VklzceVANDB2MbxYQ81NOptcz-wF0reJ0igHwho"
+      - key: QDRANT_URL
+        value: "http://localhost:6333"
+      - key: QDRANT_API_KEY
+        value: "3cc482c6-f5bc-40dc-b95c-b739ba6a44b5"
+      - key: QDRANT_COLLECTION
+        value: organizational_memory
+      - key: LLM_PROVIDER
+        value: openai
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: gpt-4o-mini
+      - key: LLM_TEMPERATURE
+        value: "0.1"
+      - key: LLM_MAX_TOKENS
+        value: "2048"
+      - key: EMBEDDING_MODEL
+        value: "BAAI/bge-small-en-v1.5"
+      - key: EMBEDDING_DIMENSION
+        value: "384"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_EXPIRATION_MINUTES
+        value: "1440"
+      - key: UPLOAD_DIR
+        value: ./data/documents
+      - key: PROCESSED_DIR
+        value: ./data/processed
