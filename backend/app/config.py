@@ -7,13 +7,17 @@ Uses pydantic-settings for validation and type coercion.
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
+from pathlib import Path
+
+# Always resolve .env relative to this file's location (backend/app/config.py -> root .env)
+_ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ROOT_ENV),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

@@ -99,40 +99,64 @@ async def lifespan(app: FastAPI):
     logger.info(
         "Starting %s v%s", settings.app_name, settings.app_version
     )
-    
-    # 1. Initialize databases
-    init_db(settings.database_url)
-    await create_tables()
-    await auto_seed_default_users()
-    await cleanup_stuck_documents()
 
-    init_vector_store(
-        url=settings.qdrant_url,
-        api_key=settings.qdrant_api_key,
-        collection=settings.qdrant_collection,
-    )
+    # 1. Initialize PostgreSQL (non-fatal — app starts in degraded mode if unavailable)
+    try:
+        init_db(settings.database_url)
+        await create_tables()
+        await auto_seed_default_users()
+        await cleanup_stuck_documents()
+    except Exception as e:
+        logger.warning(
+            "PostgreSQL unavailable at startup: %s. "
+            "Auth and document endpoints will be degraded.", e
+        )
 
-    init_neo4j(
-        uri=settings.neo4j_uri,
-        username=settings.neo4j_username,
-        password=settings.neo4j_password,
-    )
+    # 2. Initialize Qdrant vector store (non-fatal)
+    try:
+        init_vector_store(
+            url=settings.qdrant_url,
+            api_key=settings.qdrant_api_key,
+            collection=settings.qdrant_collection,
+        )
+    except Exception as e:
+        logger.warning("Qdrant unavailable at startup: %s.", e)
 
-    # 2. Initialize LLM provider
-    init_llm_provider(
-        provider=settings.llm_provider,
-        api_key=settings.llm_api_key,
-        model=settings.llm_model,
-    )
+    # 3. Initialize Neo4j (non-fatal)
+    try:
+        init_neo4j(
+            uri=settings.neo4j_uri,
+            username=settings.neo4j_username,
+            password=settings.neo4j_password,
+        )
+    except Exception as e:
+        logger.warning("Neo4j unavailable at startup: %s.", e)
 
-    # 3. Register sentence embeddings model (lazy loads on first request)
-    init_encoder(model_name=settings.embedding_model)
+    # 4. Initialize LLM provider (non-fatal)
+    try:
+        init_llm_provider(
+            provider=settings.llm_provider,
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+        )
+    except Exception as e:
+        logger.warning("LLM provider unavailable at startup: %s.", e)
 
+    # 5. Register sentence embeddings model (lazy loads on first request)
+    try:
+        init_encoder(model_name=settings.embedding_model)
+    except Exception as e:
+        logger.warning("Encoder init failed: %s.", e)
+
+    logger.info("%s startup complete.", settings.app_name)
     yield
-    
+
     # Shutdown / Cleanup
     logger.info("Shutting down %s", settings.app_name)
-    await close_db()
+    try:
+        await close_db()
+    except Exception:
+        pass
 
 
 app = FastAPI(
