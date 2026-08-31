@@ -79,16 +79,19 @@ class GroundedAnswerGenerator:
             retrieval_mode = "intent_routed"
             allowed_rels = intent_res.allowed_relationships
 
-        # 2. Vector search to find entry seeds
         start_vector = time.perf_counter()
-        encoder = get_encoder()
-        query_emb = encoder.encode_single(query)
-        vector_store = get_vector_store()
-        vector_results = await vector_store.search(
-            query_embedding=query_emb,
-            top_k=top_k,
-            filter_user_id=user_id,
-        )
+        vector_results = []
+        try:
+            encoder = get_encoder()
+            query_emb = encoder.encode_single(query)
+            vector_store = get_vector_store()
+            vector_results = await vector_store.search(
+                query_embedding=query_emb,
+                top_k=top_k,
+                filter_user_id=user_id,
+            )
+        except Exception as e:
+            logger.warning("Vector search unavailable during query generation: %s", e)
         vector_latency = (time.perf_counter() - start_vector) * 1000
 
         # Extract entry seeds using retriever candidates heuristic

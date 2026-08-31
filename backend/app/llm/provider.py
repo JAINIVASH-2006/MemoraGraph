@@ -88,15 +88,17 @@ class OpenAIProvider(LLMProvider):
 class GeminiProvider(LLMProvider):
     """Google Gemini provider."""
 
-    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-3.6-flash"):
         import google.generativeai as genai
         genai.configure(api_key=api_key)
         self._genai = genai
-        if "gemini-2.0-flash" in model:
-            logger.warning("gemini-2.0-flash is deprecated. Automatically upgrading to gemini-3.6-flash.")
-            model = model.replace("gemini-2.0-flash", "gemini-3.6-flash")
-        self.model = model
-        logger.info("Gemini provider initialized. Model: %s", model)
+        # Clean model name and upgrade deprecated model names
+        clean_model = model.replace("models/", "")
+        if any(deprecated in clean_model for deprecated in ["1.5-flash", "2.0-flash", "2.5-flash", "gpt"]):
+            logger.info("Upgrading requested model '%s' to 'gemini-3.6-flash'.", clean_model)
+            clean_model = "gemini-3.6-flash"
+        self.model = clean_model
+        logger.info("Gemini provider initialized. Model: %s", self.model)
 
     async def complete(
         self,
