@@ -75,8 +75,12 @@ class Neo4jClient:
         return False
 
     async def ping(self) -> bool:
-        """Test Neo4j connectivity (async wrapper)."""
-        return self.verify_connection()
+        """Test Neo4j connectivity asynchronously without blocking event loop."""
+        import asyncio
+        try:
+            return await asyncio.to_thread(self.verify_connection)
+        except Exception:
+            return False
 
     def execute_query(
         self,

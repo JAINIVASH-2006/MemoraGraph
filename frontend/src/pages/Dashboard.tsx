@@ -31,15 +31,18 @@ export default function Dashboard() {
   useEffect(() => {
     const fetchHealth = async () => {
       try {
-        const [healthData, overviewData] = await Promise.all([
-          checkHealth(),
-          getAnalyticsOverview()
-        ]);
+        const healthData = await checkHealth();
         setHealth(healthData);
-        setOverview(overviewData);
         setHealthError(null);
+      } catch (err: any) {
+        setHealthError(err?.response?.data?.detail || 'Backend unreachable');
+      }
+
+      try {
+        const overviewData = await getAnalyticsOverview();
+        setOverview(overviewData);
       } catch {
-        setHealthError('Backend unreachable');
+        // Overview may be empty or awaiting documents/db
       } finally {
         setLoading(false);
       }

@@ -187,12 +187,12 @@ class QdrantVectorStore(VectorStore):
         return 1  # Qdrant delete doesn't return count easily
 
     async def ping(self) -> bool:
-        """Check Qdrant connectivity."""
+        """Check Qdrant connectivity asynchronously without blocking event loop."""
+        import asyncio
         try:
-            self._client.get_collections()
-            return True
+            return await asyncio.to_thread(self._client.get_collections) is not None
         except Exception as e:
-            logger.warning("Qdrant ping failed: %s", e)
+            logger.debug("Qdrant ping failed: %s", e)
             return False
 
 

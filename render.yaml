@@ -1,10 +1,11 @@
-﻿services:
+services:
   - type: web
     name: memoragraph-backend
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     plan: free
+    healthCheckPath: /healthz
     envVars:
       - key: APP_NAME
         value: MemoraGraph
