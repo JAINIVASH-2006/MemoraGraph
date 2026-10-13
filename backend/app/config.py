@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.1
     llm_max_tokens: int = 2048
+    ollama_base_url: str = "http://localhost:11434"
 
     # --- Embedding Model ---
     embedding_model: str = "BAAI/bge-small-en-v1.5"
@@ -62,8 +63,8 @@ class Settings(BaseSettings):
     jwt_expiration_minutes: int = 1440
 
     # --- File Storage ---
-    upload_dir: str = "./data/documents"
-    processed_dir: str = "./data/processed"
+    upload_dir: str = str(_ROOT_ENV.parent / "data" / "documents")
+    processed_dir: str = str(_ROOT_ENV.parent / "data" / "processed")
 
     # --- Logging ---
     log_level: str = "INFO"
@@ -73,6 +74,12 @@ class Settings(BaseSettings):
 
     # --- Max Context Size ---
     max_context_tokens: int = 1500
+
+    # --- Ingestion & Extraction ---
+    extraction_concurrency: int = 1
+    max_extraction_chunks: int = 5
+    graph_extraction_timeout_seconds: float = 120.0
+    graph_extraction_max_tokens: int = 1024
 
 
 # Singleton settings instance

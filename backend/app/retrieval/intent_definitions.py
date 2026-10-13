@@ -22,19 +22,31 @@ GENERAL_INFORMATION = "GENERAL_INFORMATION"
 
 INTENT_DEFINITIONS: Dict[str, Dict] = {
     PERSON_PROJECT: {
-        "description": "Queries about who is working on or managing which projects.",
-        "allowed_relationships": ["MANAGES", "ASSIGNED_TO", "WORKS_IN"],
+        "description": "Queries about who is working on, managing, or owning which projects or components.",
+        "allowed_relationships": ["<MANAGES", "MANAGES>", "<ASSIGNED_TO", "ASSIGNED_TO>", "<OWNS", "OWNS>"],
         "prototypes": [
             "Who is working on Project Alpha?",
             "Who is the project manager for Project Beta?",
+            "Who managed Project Alpha?",
+            "Who managed Project Atlas?",
             "List all people assigned to Project Gamma.",
             "What projects is Priya managing?",
             "Who is the lead on the security project?",
+            "Who owns Project Atlas?",
+            "Who owns the React dashboard?",
+            "Who is the owner of Project Atlas?",
+            "Who is responsible for Project Atlas?",
+            "Who is responsible for the React dashboard?",
+            "Who manages Project Atlas?",
+            "Who manages Project Alpha?",
+            "Who manages the React dashboard?",
+            "Which person owns this project?",
+            "Who is assigned responsibility for this project?",
         ]
     },
     PROJECT_RISK: {
         "description": "Queries about risks, issues, and hazards associated with projects.",
-        "allowed_relationships": ["HAS_RISK", "RELATED_TO"],
+        "allowed_relationships": ["<HAS_RISK", "HAS_RISK>", "RELATED_TO", "<CAUSED", "CAUSED>"],
         "prototypes": [
             "What risks are identified for Project Alpha?",
             "Are there any open risks in Project Beta?",
@@ -45,7 +57,7 @@ INTENT_DEFINITIONS: Dict[str, Dict] = {
     },
     PROJECT_DECISION: {
         "description": "Queries about decisions made within projects.",
-        "allowed_relationships": ["APPROVED", "DISCUSSED_IN"],
+        "allowed_relationships": ["<APPROVED", "APPROVED>", "<DISCUSSED_IN", "DISCUSSED_IN>", "<INVOLVES", "INVOLVES>", "<RESULTED_IN", "RESULTED_IN>"],
         "prototypes": [
             "What decisions have been approved for Project Alpha?",
             "What was decided in the Project Beta meeting?",
@@ -56,7 +68,7 @@ INTENT_DEFINITIONS: Dict[str, Dict] = {
     },
     DECISION_REASON: {
         "description": "Queries regarding why a decision was made, its causes or context.",
-        "allowed_relationships": ["CAUSED", "DISCUSSED_IN", "RELATED_TO"],
+        "allowed_relationships": ["<CAUSED", "CAUSED>", "<DISCUSSED_IN", "DISCUSSED_IN>", "RELATED_TO", "<INVOLVES", "INVOLVES>"],
         "prototypes": [
             "Why did we decide to migrate to the cloud?",
             "What caused the security upgrade decision?",
@@ -67,7 +79,7 @@ INTENT_DEFINITIONS: Dict[str, Dict] = {
     },
     DECISION_OUTCOME: {
         "description": "Queries about outcomes, impacts, or results of decisions.",
-        "allowed_relationships": ["RESULTED_IN", "RESOLVED_BY"],
+        "allowed_relationships": ["<RESULTED_IN", "RESULTED_IN>", "<RESOLVED_BY", "RESOLVED_BY>", "<APPROVED", "APPROVED>"],
         "prototypes": [
             "What was the outcome of the security upgrade decision?",
             "What resulted from the cloud migration decision?",
@@ -78,18 +90,19 @@ INTENT_DEFINITIONS: Dict[str, Dict] = {
     },
     EMPLOYEE_DEPARTMENT: {
         "description": "Queries about employee assignments to departments.",
-        "allowed_relationships": ["WORKS_IN", "MANAGES"],
+        "allowed_relationships": ["<WORKS_IN", "WORKS_IN>", "<MANAGES", "MANAGES>", "<PART_OF", "PART_OF>"],
         "prototypes": [
             "Which department does Arun work in?",
             "Who works in the Engineering department?",
             "Who manages the Security department?",
             "Which team does Priya belong to?",
             "List all employees in HR.",
+            "Which department is responsible for Project Atlas?",
         ]
     },
     PROJECT_TIMELINE: {
         "description": "Queries about timelines, events, and schedules of projects.",
-        "allowed_relationships": ["PART_OF", "DISCUSSED_IN"],
+        "allowed_relationships": ["<PART_OF", "PART_OF>", "<DISCUSSED_IN", "DISCUSSED_IN>", "<RESULTED_IN", "RESULTED_IN>"],
         "prototypes": [
             "What events have happened in Project Alpha?",
             "When did Project Beta start?",
@@ -100,7 +113,7 @@ INTENT_DEFINITIONS: Dict[str, Dict] = {
     },
     RISK_CAUSE: {
         "description": "Queries about the causes of risks, incidents, or issues.",
-        "allowed_relationships": ["CAUSED", "RELATED_TO"],
+        "allowed_relationships": ["<CAUSED", "CAUSED>", "RELATED_TO", "<HAS_RISK", "HAS_RISK>"],
         "prototypes": [
             "What caused the security risk in Project Alpha?",
             "Why did the security incident happen?",
@@ -111,7 +124,7 @@ INTENT_DEFINITIONS: Dict[str, Dict] = {
     },
     RISK_RESOLUTION: {
         "description": "Queries about how risks were resolved or mitigated.",
-        "allowed_relationships": ["RESOLVED_BY", "APPROVED"],
+        "allowed_relationships": ["<RESOLVED_BY", "RESOLVED_BY>", "<APPROVED", "APPROVED>", "RELATED_TO"],
         "prototypes": [
             "How was the security risk in Project Alpha resolved?",
             "Who resolved the budget deficit?",
@@ -122,8 +135,10 @@ INTENT_DEFINITIONS: Dict[str, Dict] = {
     },
     CROSS_PROJECT: {
         "description": "Queries comparing multiple projects or exploring dependencies between them.",
-        "allowed_relationships": ["DEPENDS_ON", "RELATED_TO"],
+        "allowed_relationships": ["<DEPENDS_ON", "DEPENDS_ON>", "RELATED_TO", "<PART_OF", "PART_OF>", "<INVOLVES", "INVOLVES>"],
         "prototypes": [
+            "What is the relationship between Project Aurora and Identity Gateway?",
+            "What is the relationship between Project Alpha and Project Beta?",
             "Does Project Alpha depend on Project Beta?",
             "How are Project Alpha and Project Gamma related?",
             "Are there dependencies between migration and security?",
@@ -133,9 +148,15 @@ INTENT_DEFINITIONS: Dict[str, Dict] = {
     },
     GENERAL_INFORMATION: {
         "description": "Broad or factual query with no specific relational pattern constraint.",
-        "allowed_relationships": [],  # Empty means traverse all relationships
+        "allowed_relationships": [],  # Empty means traverse all semantic relationships (excluding MENTIONED_IN)
         "prototypes": [
-            "Tell me about Project Alpha.",
+            "What is Project Alpha?",
+            "What is Project Aurora?",
+            "What is Project Atlas?",
+            "What is Project Beta?",
+            "Tell me about Project Atlas.",
+            "Describe this project.",
+            "What is this project about?",
             "What is the overall status of the company?",
             "Summary of recent reports.",
             "General summary of organizational changes.",

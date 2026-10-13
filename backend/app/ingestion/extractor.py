@@ -28,6 +28,19 @@ def extract_text(file_path: str) -> tuple[str, dict]:
         RuntimeError: for extraction failures
     """
     path = Path(file_path)
+    if not path.exists():
+        from app.config import settings
+        candidates = [
+            Path(settings.upload_dir) / path.name,
+            Path("data/documents") / path.name,
+            Path("backend/data/documents") / path.name,
+            Path(__file__).resolve().parents[3] / "data" / "documents" / path.name,
+        ]
+        for c in candidates:
+            if c.exists():
+                path = c
+                break
+
     ext = path.suffix.lower()
 
     if ext not in SUPPORTED_EXTENSIONS:

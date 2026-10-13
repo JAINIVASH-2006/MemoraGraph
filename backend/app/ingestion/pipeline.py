@@ -16,15 +16,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ingestion.extractor import extract_text
 from app.ingestion.chunker import chunk_text
 from app.ingestion.metadata_extractor import enrich_metadata
+from app.config import settings
 from app.embeddings.encoder import get_encoder
 from app.embeddings.vector_store import get_vector_store, VectorChunk
-from app.graph.extractor import extract_entities_and_relationships
+from app.graph.extractor import extract_entities_and_relationships, GraphExtractionError
 from app.graph.builder import GraphBuilder
 from app.graph.neo4j_client import get_neo4j
 from app.models.database import get_session
 from app.models.document import Document, DocumentChunk, DocumentStatus
 
 logger = logging.getLogger(__name__)
+
+
+async def _extract_graph_chunk(text: str, document_name: str) -> dict:
+    """Run one graph extraction with a bounded local-inference deadline."""
+    timeout_seconds = max(0.1, getattr(settings, "graph_extraction_timeout_seconds", 45.0))
+    try:
+        return await asyncio.wait_for(
+            extract_entities_and_relationships(
+                text=text,
+                document_name=document_name,
+                max_tokens=getattr(settings, "graph_extraction_max_tokens", 1024),
+            ),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError as e:
+        raise GraphExtractionError(
+            f"Graph extraction timed out after {timeout_seconds}s"
+        ) from e
 
 
 async def process_document_pipeline(
@@ -93,6 +112,10 @@ async def _run_pipeline(
         vector_store = get_vector_store()
         vector_chunks = []
 
+        # Delete any existing chunks in PostgreSQL for this document to support idempotent reprocessing
+        from sqlalchemy import delete
+        await db_session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == doc.id))
+
         for i, chunk in enumerate(chunks):
             chunk_id = f"{doc.id}-c{i}"
             embedding = embeddings[i]
@@ -153,55 +176,104 @@ async def _run_pipeline(
         except Exception as neo_err:
             logger.warning("Neo4j client check encountered an error: %s", neo_err)
 
+        graph_error: str | None = None
         if neo4j_connected:
             try:
                 graph_builder = GraphBuilder(neo4j_client)
-                
-                # Ensure Neo4j uniqueness constraints exist
                 neo4j_client.ensure_constraints()
 
-                # Extract graph elements chunk-by-chunk for local context in parallel
-                max_extract_chunks = min(5, len(chunks))
-                
-                logger.info("Extracting entities and relationships concurrently for %d chunks", max_extract_chunks)
-                extraction_tasks = [
-                    extract_entities_and_relationships(
-                        text=chunks[i].text,
-                        document_name=doc.name,
+                max_extract_chunks = min(getattr(settings, "max_extraction_chunks", 5), len(chunks))
+                concurrency = max(1, getattr(settings, "extraction_concurrency", 1))
+
+                successful_extractions: list[dict] = []
+                successful_chunk_ids: list[str] = []
+                failed_chunks: list[tuple[int, str]] = []
+
+                if concurrency <= 1:
+                    logger.info("Extracting graph data sequentially for %d chunks", max_extract_chunks)
+                    for i in range(max_extract_chunks):
+                        try:
+                            extraction = await _extract_graph_chunk(chunks[i].text, doc.name)
+                            successful_extractions.append(extraction)
+                            successful_chunk_ids.append(f"{doc.id}-c{i}")
+                        except Exception as e:
+                            error = f"{type(e).__name__}: {e!r}"
+                            logger.warning("Graph extraction failed for chunk %d: %s.", i, error)
+                            failed_chunks.append((i, error))
+                else:
+                    logger.info(
+                        "Extracting graph data concurrently for %d chunks (concurrency limit: %d)",
+                        max_extract_chunks, concurrency,
                     )
-                    for i in range(max_extract_chunks)
-                ]
-                
-                extractions = await asyncio.gather(*extraction_tasks)
-                
-                for i, extraction in enumerate(extractions):
-                    chunk_id = f"{doc.id}-c{i}"
-                    ent_cnt, rel_cnt = graph_builder.ingest_extraction(
-                        extraction=extraction,
+                    semaphore = asyncio.Semaphore(concurrency)
+
+                    async def _extract_chunk(idx: int):
+                        async with semaphore:
+                            try:
+                                ext = await _extract_graph_chunk(chunks[idx].text, doc.name)
+                                return (idx, ext, None)
+                            except Exception as e:
+                                error = f"{type(e).__name__}: {e!r}"
+                                logger.warning("Graph extraction failed for chunk %d: %s.", idx, error)
+                                return (idx, None, error)
+
+                    tasks = [_extract_chunk(i) for i in range(max_extract_chunks)]
+                    results = await asyncio.gather(*tasks)
+                    for idx, ext, err in results:
+                        if ext is not None:
+                            successful_extractions.append(ext)
+                            successful_chunk_ids.append(f"{doc.id}-c{idx}")
+                        else:
+                            failed_chunks.append((idx, err))
+
+                if failed_chunks:
+                    first_err = failed_chunks[0][1] or "Unknown extraction error"
+                    graph_error = (
+                        f"Graph extraction failed for {len(failed_chunks)} of {max_extract_chunks} chunks. "
+                        f"First error: {first_err}"
+                    )
+
+                if successful_extractions:
+                    total_entities, total_rels = graph_builder.ingest_document_graph(
+                        extractions=successful_extractions,
                         document_id=doc.id,
                         document_name=doc.name,
-                        chunk_id=chunk_id,
+                        chunk_ids=successful_chunk_ids,
                         user_id=doc.uploaded_by,
                     )
-                    total_entities += ent_cnt
-                    total_rels += rel_cnt
-            except Exception as graph_err:
-                logger.warning("Graph extraction/ingestion encountered an issue: %s", graph_err)
+
+                logger.info(
+                    "Graph extraction completed: %d entities, %d relationships",
+                    total_entities, total_rels,
+                )
+            except Exception as graph_exc:
+                graph_error = f"Graph extraction failed ({type(graph_exc).__name__}): {graph_exc!r}"
+                logger.exception("Graph processing failed for document %s", document_id)
+        else:
+            graph_error = "Graph extraction unavailable: Neo4j connection could not be verified."
 
         # Update stats and complete
         doc.entity_count = total_entities
         doc.relationship_count = total_rels
-        doc.status = DocumentStatus.PROCESSED
+        doc.status = DocumentStatus.FAILED if graph_error else DocumentStatus.PROCESSED
+        doc.error_message = graph_error
         doc.processed_at = datetime.now(timezone.utc)
         await db_session.commit()
         
         logger.info(
-            "Document processing pipeline succeeded for document %s: %d chunks, %d entities, %d relationships",
-            doc.name, doc.chunk_count, doc.entity_count, doc.relationship_count,
+            "Document processing pipeline completed for document %s: status=%s, %d chunks, %d entities, %d relationships",
+            doc.name, doc.status.value, doc.chunk_count, doc.entity_count, doc.relationship_count,
         )
 
     except Exception as e:
-        logger.exception("Document processing failed for document: %s", doc.name)
+        logger.exception("Document processing failed for document_id: %s", document_id)
+        # Attempt to clean up any partial vectors in Qdrant to prevent stale vector data
+        try:
+            vector_store = get_vector_store()
+            await vector_store.delete_by_document(document_id)
+        except Exception as cleanup_err:
+            logger.debug("Failed to clean up vectors on pipeline failure: %s", cleanup_err)
+
         # Update status to FAILED and record error message
         await db_session.rollback()
         # Re-fetch document to avoid stale session state
@@ -209,5 +281,5 @@ async def _run_pipeline(
         failed_doc = result.scalar_one_or_none()
         if failed_doc:
             failed_doc.status = DocumentStatus.FAILED
-            failed_doc.error_message = str(e)
+            failed_doc.error_message = f"{type(e).__name__}: {e!r}"
             await db_session.commit()

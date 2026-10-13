@@ -1,15 +1,44 @@
 import { useState, useEffect } from 'react';
 import { Settings as SettingsIcon, Shield, Server, User, Database, Share2, Key, Bell } from 'lucide-react';
-import { getMe } from '../services/api';
+import { getMe, checkHealth, type HealthStatus } from '../services/api';
 import type { User as UserType } from '../types';
 
 export default function Settings() {
   const [me, setMe] = useState<UserType | null>(null);
+  const [health, setHealth] = useState<HealthStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getMe().then(setMe).catch(console.error).finally(() => setLoading(false));
+    Promise.all([
+      getMe().catch((err) => {
+        console.error('Failed to load profile:', err);
+        return null;
+      }),
+      checkHealth().catch((err) => {
+        console.error('Failed to load health info:', err);
+        return null;
+      }),
+    ])
+      .then(([userData, healthData]) => {
+        if (userData) setMe(userData);
+        if (healthData) setHealth(healthData);
+      })
+      .finally(() => setLoading(false));
   }, []);
+
+  const formatLlmModel = (rawModel?: string) => {
+    if (!rawModel) return 'Qwen3 1.7B';
+    if (rawModel.toLowerCase().includes('qwen3:1.7b')) return 'Qwen3 1.7B';
+    if (rawModel.toLowerCase().includes('qwen3:4b')) return 'Qwen3 4B';
+    return rawModel;
+  };
+
+  const llmProviderName = health?.llm_provider
+    ? health.llm_provider.charAt(0).toUpperCase() + health.llm_provider.slice(1)
+    : 'Ollama';
+  const llmModelName = formatLlmModel(health?.llm_model);
+  const isLlmActive = health?.services?.ollama?.status === 'up' || (health?.status === 'healthy' && health?.llm_provider === 'ollama');
+  const llmStatus = isLlmActive ? 'Active' : 'Offline';
 
   return (
     <div className="page" style={{ maxWidth: 1100 }}>
@@ -69,25 +98,25 @@ export default function Settings() {
                   icon={<Database size={15} />}
                   label="Vector Database"
                   name="Qdrant Server"
-                  detail="Collection: organizational_memory"
+                  detail={`Collection: organizational_memory • ${health?.services?.qdrant?.status === 'up' ? 'Connected' : 'Unavailable'}`}
                 />
                 <ServiceTile
                   icon={<Share2 size={15} />}
                   label="Knowledge Graph"
                   name="Neo4j Database"
-                  detail="Bolt Port: 7687"
+                  detail={`Bolt Port: 7687 • ${health?.services?.neo4j?.status === 'up' ? 'Connected' : 'Unavailable'}`}
                 />
                 <ServiceTile
                   icon={<Key size={15} />}
                   label="Embedding Model"
-                  name="BAAI/bge-small-en"
-                  detail="Dimension: 384"
+                  name={health?.embedding_model || 'BAAI/bge-small-en-v1.5'}
+                  detail="Dimension: 384 • FastEmbed"
                 />
                 <ServiceTile
                   icon={<Bell size={15} />}
                   label="LLM Provider"
-                  name="Mock Provider"
-                  detail="Offline mode active"
+                  name={`${llmProviderName} (${llmModelName})`}
+                  detail={`Status: ${llmStatus}`}
                 />
               </div>
             </div>

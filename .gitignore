@@ -54,3 +54,11 @@ docker-compose.override.yml
 
 ## Test cache
 .pytest_cache/
+
+## Scratch and temporary outputs
+scratch/
+*scratch*
+e2e_output.txt
+regression_results.json
+backend/e2e_check.py
+

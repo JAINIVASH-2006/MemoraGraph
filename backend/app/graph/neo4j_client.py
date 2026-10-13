@@ -170,9 +170,10 @@ class Neo4jClient:
         if props:
             prop_clause = " SET r += $props"
         
+        # Match nodes by unique ID for maximum robustness across label variations
         cypher = (
-            f"MATCH (a:{from_type} {{id: $from_id}}) "
-            f"MATCH (b:{to_type} {{id: $to_id}}) "
+            f"MATCH (a {{id: $from_id}}) "
+            f"MATCH (b {{id: $to_id}}) "
             f"MERGE (a)-[r:{rel_type}]->(b)"
             f"{prop_clause}"
         )
@@ -270,7 +271,7 @@ class Neo4jClient:
         
         cypher = (
             f"MATCH {label_match} "
-            f"WHERE (toLower(n.name) CONTAINS toLower($query) OR toLower(n.id) CONTAINS toLower($query)) "
+            f"WHERE ($query = '' OR toLower(coalesce(n.name, '')) CONTAINS toLower($query) OR toLower(coalesce(n.id, '')) CONTAINS toLower($query)) "
             f"{user_clause}"
             f"RETURN n, labels(n) as types "
             f"LIMIT $limit"

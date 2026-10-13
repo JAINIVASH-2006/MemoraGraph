@@ -134,6 +134,7 @@ class TimelineEvent(BaseModel):
 
 class AnalyticsOverview(BaseModel):
     total_documents: int
+    total_chunks: int = 0
     total_entities: int
     total_relationships: int
     total_queries: int

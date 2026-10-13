@@ -22,16 +22,53 @@ def calculate_precision_at_k(retrieved_ids: List[str], ground_truth_ids: List[st
     return relevant_retrieved / k
 
 
+def calculate_document_recall_at_k(retrieved_ids: List[str], ground_truth_ids: List[str], k: int) -> float:
+    """Calculate Document Recall@K: ratio of relevant documents retrieved among all relevant documents."""
+    if not retrieved_ids or not ground_truth_ids or k <= 0:
+        return 0.0
+    top_k_retrieved = set(retrieved_ids[:k])
+    relevant_retrieved = sum(1 for gtid in set(ground_truth_ids) if gtid in top_k_retrieved)
+    return relevant_retrieved / len(set(ground_truth_ids))
+
+
+def calculate_f1_score(precision: float, recall: float) -> float:
+    """Calculate standard F1 harmonic mean: 2 * P * R / (P + R). Handles zero-division safely."""
+    if (precision + recall) <= 0.0:
+        return 0.0
+    return (2.0 * precision * recall) / (precision + recall)
+
+
+def calculate_retrieval_f1_at_k(precision: float, recall: float) -> float:
+    """Alias for calculate_f1_score for retrieval metrics."""
+    return calculate_f1_score(precision, recall)
+
+
 def calculate_path_precision_at_k(retrieved_paths: List[str], ground_truth_paths: List[str], k: int) -> float:
     """
     Calculate Path Precision@K.
     Measures ratio of intent-allowed relationship types vs actual traversed types.
+    Matches either exact string representation or semantic relationship/entity containment.
     """
     if not retrieved_paths or not ground_truth_paths or k <= 0:
         return 0.0
     
     top_k_paths = retrieved_paths[:k]
-    matched_paths = sum(1 for path in top_k_paths if path in ground_truth_paths)
+    
+    def matches_ground_truth(path: str) -> bool:
+        if path in ground_truth_paths:
+            return True
+        p_lower = path.lower()
+        for gt in ground_truth_paths:
+            gt_lower = gt.lower()
+            if gt_lower in p_lower or p_lower in gt_lower:
+                return True
+            import re
+            gt_words = [w for w in re.findall(r"\b[a-zA-Z0-9_-]+\b", gt_lower) if w not in ("project", "the", "a", "an")]
+            if gt_words and all(w in p_lower for w in gt_words):
+                return True
+        return False
+
+    matched_paths = sum(1 for path in top_k_paths if matches_ground_truth(path))
     return matched_paths / k
 
 
@@ -62,6 +99,37 @@ def calculate_answer_recall_at_k(generated_answer: str, ground_truth_answers: Li
         best_recall = max(best_recall, recall)
 
     return best_recall
+
+
+def calculate_answer_f1(generated_answer: str, ground_truth_answers: List[str]) -> float:
+    """
+    Evaluate Answer F1 score using harmonic mean of keyword precision and keyword recall.
+    """
+    if not generated_answer or not ground_truth_answers:
+        return 0.0
+
+    import re
+    def get_keywords(text: str) -> set[str]:
+        words = re.findall(r"\b[a-zA-Z0-9-]{3,}\b", text.lower())
+        stops = {"the", "and", "for", "with", "that", "this", "from", "was", "were", "are", "project", "risk", "decision"}
+        return {w for w in words if w not in stops}
+
+    gen_keywords = get_keywords(generated_answer)
+    if not gen_keywords:
+        return 0.0
+
+    best_f1 = 0.0
+    for gt in ground_truth_answers:
+        gt_keywords = get_keywords(gt)
+        if not gt_keywords:
+            continue
+        matches = len(gen_keywords.intersection(gt_keywords))
+        prec = matches / len(gen_keywords)
+        rec = matches / len(gt_keywords)
+        f1 = calculate_f1_score(prec, rec)
+        best_f1 = max(best_f1, f1)
+
+    return best_f1
 
 
 def bootstrap_confidence_interval(

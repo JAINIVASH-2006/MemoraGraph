@@ -54,10 +54,10 @@ export default function QueryHistory() {
                     background: 'rgba(99,102,241,0.08)', color: 'var(--color-accent)',
                     border: '1px solid rgba(99,102,241,0.2)',
                   }}>
-                    Intent: {item.intent}
+                    Intent: {item.intent || 'GENERAL'}
                   </span>
                   <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
-                    {(item.intent_confidence * 100).toFixed(0)}% Match
+                    {item.intent_confidence != null ? `${(item.intent_confidence * 100).toFixed(0)}% Match` : 'Confidence N/A'}
                   </span>
                 </div>
               </div>

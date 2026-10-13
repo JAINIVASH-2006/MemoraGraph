@@ -24,6 +24,11 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://memoragraph:memoragraph@postgres:5432/memoragraph
+      - NEO4J_URI=bolt://neo4j:7687
+      - QDRANT_URL=http://qdrant:6333
+      - OLLAMA_BASE_URL=http://ollama:11434
     depends_on:
       - postgres
       - neo4j
@@ -82,15 +87,27 @@ services:
     networks:
       - memoragraph
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/6333'"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # --- Ollama ---
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - memoragraph
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   neo4j_data:
   qdrant_data:
+  ollama_data:
 
 networks:
   memoragraph:

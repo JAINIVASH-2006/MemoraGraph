@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from app.embeddings.encoder import get_encoder, init_encoder, _encoder_instance
 from app.embeddings.vector_store import get_vector_store, init_vector_store
 from app.graph.neo4j_client import get_neo4j, init_neo4j
-from app.retrieval.graph_retriever import GraphRetriever
+from app.retrieval.graph_retriever import GraphRetriever, normalize_rel_spec
 from app.retrieval.intent_classifier import get_intent_classifier
 from app.retrieval.context_validator import validate_evidence
 from app.config import settings
@@ -125,9 +125,11 @@ async def test_directed_routing_queries():
             # Check intent matching
             assert intent_res.intent != "LOW_CONFIDENCE"
             # Verify paths return only valid relationship types
+            # Normalize directional specs (e.g. "<MANAGES" -> "MANAGES") for comparison
+            bare_allowed = {normalize_rel_spec(r) for r in allowed_rels}
             for path in paths:
                 for edge in path.edges:
-                    assert edge.type in allowed_rels
+                    assert edge.type in bare_allowed, f"Edge type {edge.type} not in allowed: {bare_allowed}"
                     
     print("="*80 + "\n")
 
@@ -140,8 +142,9 @@ async def test_noise_suppression():
     # Unrelated seed entities list (e.g. unrelated employee or technology)
     seed_entities = ["Project Alpha"]
     
-    # We query project risk, which permits only HAS_RISK and RELATED_TO
-    allowed_rels = ["HAS_RISK", "RELATED_TO"]
+    # We query project risk, which permits directional HAS_RISK and RELATED_TO
+    allowed_rels = ["<HAS_RISK", "HAS_RISK>", "RELATED_TO", "<CAUSED", "CAUSED>"]
+    bare_allowed = {normalize_rel_spec(r) for r in allowed_rels}
     
     paths = graph_retriever.retrieve_paths(
         seed_entity_names=seed_entities,
@@ -153,7 +156,7 @@ async def test_noise_suppression():
     # because they are outside of the allowed relationship schema for PROJECT_RISK!
     for path in paths:
         for edge in path.edges:
-            assert edge.type in allowed_rels
+            assert edge.type in bare_allowed, f"Edge type {edge.type} not in allowed: {bare_allowed}"
             assert edge.type not in ("WORKS_IN", "MANAGES", "APPROVED")
 
 

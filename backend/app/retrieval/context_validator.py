@@ -7,7 +7,7 @@ Enforces size constraints to fit LLM limits.
 """
 
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from app.schemas.query import Source, GraphPath
 
 logger = logging.getLogger(__name__)
@@ -86,30 +86,116 @@ def validate_and_assemble_context(
     return full_context, dedup_sources
 
 
+def extract_relevant_context(chunk_text: str, query: str, max_chars: int = 1500) -> str:
+    """
+    Extracts relevant sentences/lines matching query keywords, prioritizing
+    definition lines for overview queries and incident lines for cause/resolution queries.
+    Preserves factual grounding and document provenance.
+    """
+    if len(chunk_text) <= max_chars:
+        return chunk_text
+
+    stop_words = {"who", "what", "where", "when", "why", "how", "the", "a", "an", "is", "are", "was", "were", "this", "that", "for", "with", "between", "and"}
+    query_words = set(w.lower().strip("?,.!") for w in query.split() if len(w) > 2 and w.lower() not in stop_words)
+    query_lower = query.lower()
+
+    lines = [line.strip() for line in chunk_text.split("\n") if line.strip()]
+    
+    # Detect query focus
+    is_cause_query = any(term in query_lower for term in ("cause", "caused", "why", "reason", "root cause"))
+    is_resolution_query = any(term in query_lower for term in ("resolve", "resolved", "fix", "fixed", "correct", "action", "who resolved"))
+    is_def_query = any(term in query_lower for term in ("what is", "overview", "explain", "describe", "relationship", "relation", "platform", "component"))
+
+    priority_terms = []
+    if is_cause_query:
+        priority_terms.extend(["cause", "caused", "root cause", "incorrect", "due to", "because", "symptom"])
+    if is_resolution_query:
+        priority_terms.extend(["resolved", "resolved by", "corrected", "fixed", "verification", "verified by", "solution", "action"])
+    if is_def_query:
+        priority_terms.extend(["overview", "is a", "is an", "consists of", "platform", "project", "depends on", "service", "architecture"])
+
+    # 1. Exact query match lines (highest relevance)
+    direct_match_lines = [line for line in lines if any(w in line.lower() for w in query_words)]
+    
+    # 2. Priority terms lines
+    priority_lines = [line for line in lines if any(term in line.lower() for term in priority_terms)]
+    
+    # Combine matches with direct query matches first
+    selected_lines = list(dict.fromkeys(direct_match_lines + priority_lines))
+    if not selected_lines:
+        return chunk_text[:max_chars]
+
+    assembled = []
+    current_len = 0
+    for line in selected_lines:
+        if current_len + len(line) + 1 <= max_chars:
+            assembled.append(line)
+            current_len += len(line) + 1
+        else:
+            break
+            
+    return "\n".join(assembled) if assembled else chunk_text[:max_chars]
+
+
 def validate_evidence(
     sources: List[Source],
     graph_paths: List[GraphPath],
     max_tokens: int = 1500,
+    query: Optional[str] = None,
+    is_fallback: bool = False,
 ) -> List[dict]:
     """
     Ranks, deduplicates, and filters vector search and graph path evidence.
-    Enforces a token budget limit by retaining only high-scoring unique evidence.
+    Enforces entity-relevance guardrails to prevent unrelated projects or incidents
+    from contaminating evidence for a specific queried entity.
     """
+    import re
     evidence_list = []
     seen_texts = set()
-    
-    # 1. Map vector sources to EvidenceObjects
+
+    # Identify any specific project names or entity IDs explicitly requested in query
+    target_projects = []
+    target_ids = []
+    query_lower = (query or "").lower()
+    if query:
+        target_projects = [p.lower() for p in re.findall(r"[Pp]roject\s+([A-Za-z0-9_-]+)", query)]
+        target_ids = [i.lower() for i in re.findall(r"\b([A-Z]{2,5}-\d{2,5})\b", query)]
+
+    # 1. Map vector sources to EvidenceObjects with relevance filtering
     for s in sources:
         norm_text = " ".join(s.text.strip().split()).lower()
         if norm_text in seen_texts:
             continue
+
+        # Relevance guardrail: If query targets a specific project, verify chunk relevance
+        if target_projects:
+            chunk_text_lower = s.text.lower()
+            doc_name_lower = (s.document_name or "").lower()
+            # If chunk is from a known different project and contains none of the target projects, filter it out
+            matches_target = any(tp in chunk_text_lower or tp in doc_name_lower for tp in target_projects)
+            if not matches_target and any(f"project {tp}" in query_lower for tp in target_projects):
+                # Discard chunks about other projects that have zero mention of the target project
+                continue
+
+        # Relevance guardrail: If query targets a specific incident/entity ID (e.g. INC-301)
+        if target_ids:
+            chunk_text_lower = s.text.lower()
+            doc_name_lower = (s.document_name or "").lower()
+            matches_id = any(tid in chunk_text_lower or tid in doc_name_lower for tid in target_ids)
+            if not matches_id:
+                # If chunk does not mention the target ID, drop it to avoid incident confusion
+                continue
+
         seen_texts.add(norm_text)
-        
         doc_id = s.document_id
         chunk_id = s.chunk_id or ""
-        
+
+        chunk_content = s.text
+        if query and (is_fallback or len(s.text) > 1500):
+            chunk_content = extract_relevant_context(s.text, query)
+
         evidence_list.append({
-            "text": s.text,
+            "text": chunk_content,
             "source_document_id": doc_id,
             "chunk_id": chunk_id,
             "entities": [],
@@ -118,13 +204,32 @@ def validate_evidence(
             "score": s.score
         })
         
-    # 2. Map graph paths to EvidenceObjects
+    # 2. Map graph paths to EvidenceObjects with relevance filtering
     for gp in graph_paths:
         if not gp.description:
             continue
         norm_desc = gp.description.lower()
         if norm_desc in seen_texts:
             continue
+
+        # Relevance guardrail: If query targets a specific project or ID, ensure graph path touches it
+        if target_projects:
+            path_touches_target = any(
+                tp in norm_desc or any(tp in n.label.lower() for n in gp.nodes)
+                for tp in target_projects
+            )
+            if not path_touches_target:
+                # Discard graph paths from other projects
+                continue
+
+        if target_ids:
+            path_touches_id = any(
+                tid in norm_desc or any(tid in n.label.lower() for n in gp.nodes)
+                for tid in target_ids
+            )
+            if not path_touches_id:
+                continue
+
         seen_texts.add(norm_desc)
         
         # Resolve document provenance from nodes
@@ -136,12 +241,10 @@ def validate_evidence(
             if n.properties.get("source_chunk_id"):
                 chunk_id = n.properties["source_chunk_id"]
                 
-        # Gather entity names and rel types
         entities = [n.label for n in gp.nodes]
         relationships = [e.type for e in gp.edges]
         path_seq = [f"{e.source} -[{e.type}]-> {e.target}" for e in gp.edges]
         
-        # Graph path score (high priority relation)
         score = 0.90
         
         evidence_list.append({

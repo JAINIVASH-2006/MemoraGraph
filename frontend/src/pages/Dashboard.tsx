@@ -153,7 +153,7 @@ export default function Dashboard() {
                       <span className="service-name">{name}</span>
                     </div>
                     <span className={`service-badge service-badge-${svc.status === 'up' ? 'up' : 'down'}`}>
-                      {svc.status}
+                      {svc.status === 'up' ? 'Connected' : svc.status === 'unavailable' ? 'Unavailable' : 'Disconnected'}
                     </span>
                   </div>
                 ))}
@@ -180,24 +180,27 @@ export default function Dashboard() {
           <div className="card-body">
             <div className="pipeline">
               {[
-                { label: 'Document Upload', status: 'ready' },
-                { label: 'Text Extraction & Chunking', status: 'ready' },
-                { label: 'Entity & Relationship Extraction', status: 'ready' },
-                { label: 'Knowledge Graph (Neo4j)', status: 'ready' },
-                { label: 'Vector Embeddings (Qdrant)', status: 'ready' },
-                { label: 'Semantic Intent Classification', status: 'ready' },
-                { label: 'Directed Edge-Routing', status: 'ready' },
-                { label: 'Context Validation', status: 'ready' },
-                { label: 'LLM Generation', status: 'ready' },
-              ].map((step, i) => (
-                <div key={i} className="pipeline-step">
-                  <div className={`pipeline-dot pipeline-dot-${step.status}`} />
-                  <span className="pipeline-label">{step.label}</span>
-                  <span className={`pipeline-status pipeline-status-${step.status}`}>
-                    {step.status === 'ready' ? 'Ready' : 'Phase ' + (Math.floor(i / 2) + 2)}
-                  </span>
-                </div>
-              ))}
+                { label: 'Document Upload', isReady: true },
+                { label: 'Text Extraction & Chunking', isReady: true },
+                { label: 'Entity & Relationship Extraction', isReady: true },
+                { label: 'Knowledge Graph (Neo4j)', isReady: health?.services?.neo4j?.status === 'up' },
+                { label: 'Vector Embeddings (Qdrant)', isReady: health?.services?.qdrant?.status === 'up' },
+                { label: 'Semantic Intent Classification', isReady: true },
+                { label: 'Directed Edge-Routing', isReady: true },
+                { label: 'Context Validation', isReady: true },
+                { label: 'LLM Generation', isReady: health?.services?.ollama?.status === 'up' || (health?.status === 'healthy' && health?.llm_provider === 'ollama') },
+              ].map((step, i) => {
+                const statusStr = step.isReady ? 'ready' : 'offline';
+                return (
+                  <div key={i} className="pipeline-step">
+                    <div className={`pipeline-dot pipeline-dot-${statusStr}`} />
+                    <span className="pipeline-label">{step.label}</span>
+                    <span className={`pipeline-status pipeline-status-${statusStr}`}>
+                      {step.isReady ? 'Ready' : 'Offline'}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

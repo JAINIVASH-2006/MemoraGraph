@@ -9,11 +9,16 @@ import json
 import logging
 import re
 import uuid
-from typing import Any
+from typing import Any, Optional, Union
 
 from app.graph.schema import VALID_NODE_TYPES, VALID_REL_TYPES
 
 logger = logging.getLogger(__name__)
+
+class GraphExtractionError(Exception):
+    """Raised when entity/relationship extraction fails due to LLM timeout, network, or parse errors."""
+    pass
+
 
 EXTRACTION_SYSTEM_PROMPT = """You are an expert organizational knowledge extractor.
 Extract entities and relationships from the provided text.
@@ -44,33 +49,117 @@ RULES:
 
 
 def _slugify(name: str) -> str:
-    """Create a stable ID from an entity name."""
-    slug = re.sub(r"[^a-zA-Z0-9\s-]", "", name.lower())
-    slug = re.sub(r"\s+", "-", slug.strip())
-    return slug[:64] or str(uuid.uuid4())[:8]
+    """Create a stable, canonical ID from an entity name."""
+    if not name:
+        return ""
+    # Normalize underscores, dots, slashes, and separators to hyphens
+    s = re.sub(r"[._/\\|]+", "-", str(name).lower())
+    s = re.sub(r"[^a-z0-9\s-]", "", s)
+    s = re.sub(r"[\s-]+", "-", s.strip())
+    return s[:64].strip("-") or str(uuid.uuid4())[:8]
 
 
-def _validate_and_clean(raw: dict) -> dict:
-    """Validate extracted entities/relationships against the strict schema."""
-    entities = []
-    entity_id_map = {}
+def _resolve_endpoint(
+    raw_val: Optional[str],
+    entity_id_map: dict[str, str],
+    name_to_id_map: dict[str, str],
+) -> Optional[str]:
+    """
+    Resolve a raw endpoint reference (ID, slug, or name) to a canonical entity ID.
+    Returns canonical entity ID if found in entity_id_map, else None.
+    """
+    if not raw_val or not str(raw_val).strip():
+        return None
+        
+    val_str = str(raw_val).strip()
+    val_slug = _slugify(val_str)
+    val_lower = val_str.lower()
     
+    # 1. Exact ID match
+    if val_str in entity_id_map:
+        return val_str
+        
+    # 2. Slugified ID match
+    if val_slug in entity_id_map:
+        return val_slug
+        
+    # 3. Exact/lowercased name match
+    if val_lower in name_to_id_map:
+        return name_to_id_map[val_lower]
+        
+    # 4. Slugified name match
+    if val_slug in name_to_id_map:
+        return name_to_id_map[val_slug]
+
+    # 5. Prefix/suffix variations (e.g. 'Project Atlas' <-> 'Atlas', 'Engineering' <-> 'Engineering Department')
+    for candidate in [
+        f"project-{val_slug}",
+        val_slug.replace("project-", ""),
+        f"{val_slug}-department",
+        val_slug.replace("-department", ""),
+        f"{val_slug}-team",
+        val_slug.replace("-team", ""),
+    ]:
+        if candidate in entity_id_map:
+            return candidate
+        if candidate in name_to_id_map:
+            return name_to_id_map[candidate]
+
+    return None
+
+
+def _validate_and_clean(
+    raw: dict,
+    known_entities: Optional[dict[str, Any] | list[dict[str, Any]]] = None,
+) -> dict:
+    """
+    Validate extracted entities and relationships against the strict schema.
+    Resolves relationship endpoints against both chunk-local entities and any
+    document-level known_entities provided.
+    """
+    raw_entities = raw.get("entities", []) if isinstance(raw, dict) else []
+    raw_relationships = raw.get("relationships", []) if isinstance(raw, dict) else []
+    
+    logger.info(
+        "Raw extraction received: %d entities, %d relationships from LLM",
+        len(raw_entities), len(raw_relationships),
+    )
+
+    entities = []
+    entity_id_map: dict[str, str] = {}  # id -> type
+    name_to_id_map: dict[str, str] = {}  # name_lower/slug -> id
+    
+    # Populate known entities from prior chunks if provided
+    if known_entities:
+        known_list = known_entities.values() if isinstance(known_entities, dict) else known_entities
+        for k_ent in known_list:
+            k_id = k_ent.get("id")
+            k_type = k_ent.get("type")
+            k_name = k_ent.get("name", "")
+            if k_id and k_type:
+                entity_id_map[k_id] = k_type
+                if k_name:
+                    name_to_id_map[k_name.lower()] = k_id
+                    name_to_id_map[_slugify(k_name)] = k_id
+
     # 1. Validate Entities
-    for ent in raw.get("entities", []):
+    for ent in raw_entities:
         ent_type = ent.get("type")
         ent_name = ent.get("name")
         
         # Enforce valid entity labels
         if ent_type not in VALID_NODE_TYPES:
-            logger.debug("Rejections: Unknown entity type '%s'", ent_type)
+            logger.warning("Rejected entity '%s': Invalid type '%s'", ent_name, ent_type)
             continue
-        if not ent_name:
-            logger.debug("Rejections: Empty entity name")
+        if not ent_name or not str(ent_name).strip():
+            logger.warning("Rejected entity: Empty entity name")
             continue
             
-        # Ensure stable IDs
-        ent_id = ent.get("id") or _slugify(ent_name)
+        # Ensure stable canonical IDs
+        raw_ent_id = ent.get("id")
+        ent_id = _slugify(raw_ent_id) if raw_ent_id else _slugify(ent_name)
         ent["id"] = ent_id
+        ent["name"] = str(ent_name).strip()
         
         # Clean null values from properties
         ent["properties"] = {
@@ -79,36 +168,59 @@ def _validate_and_clean(raw: dict) -> dict:
         
         entities.append(ent)
         entity_id_map[ent_id] = ent_type
+        name_to_id_map[ent["name"].lower()] = ent_id
+        name_to_id_map[_slugify(ent["name"])] = ent_id
 
     # 2. Validate Relationships
     relationships = []
-    for rel in raw.get("relationships", []):
-        # Normalize alternative formats
-        from_id = rel.get("from_id") or _slugify(rel.get("source", ""))
-        to_id = rel.get("to_id") or _slugify(rel.get("target", ""))
-        rel_type = rel.get("rel_type") or rel.get("relationship", "")
+    rejections_count = 0
+    
+    for rel in raw_relationships:
+        # Extract potential endpoint fields
+        raw_from = rel.get("from_id") or rel.get("source") or rel.get("from") or rel.get("source_id") or rel.get("head")
+        raw_to = rel.get("to_id") or rel.get("target") or rel.get("to") or rel.get("target_id") or rel.get("tail")
+        rel_type = (rel.get("rel_type") or rel.get("relationship") or rel.get("type") or "").strip().upper()
         
         # Enforce valid relationship types
         if rel_type not in VALID_REL_TYPES:
-            logger.debug("Rejections: Unknown relationship type '%s'", rel_type)
+            logger.warning("Rejected relationship [%s --(%s)--> %s]: Unknown rel_type '%s'", raw_from, rel_type, raw_to, rel_type)
+            rejections_count += 1
             continue
             
-        # Enforce source & target existence in this chunk's entity list
-        if from_id not in entity_id_map or to_id not in entity_id_map:
-            logger.debug("Rejections: Source '%s' or Target '%s' missing from entity set", from_id, to_id)
-            continue
-            
-        rel["from_id"] = from_id
-        rel["to_id"] = to_id
-        rel["rel_type"] = rel_type
-        rel["from_type"] = entity_id_map[from_id]
-        rel["to_type"] = entity_id_map[to_id]
-        rel["properties"] = {
-            k: v for k, v in rel.get("properties", {}).items() if v is not None
-        }
+        # Resolve source & target endpoints
+        from_id = _resolve_endpoint(raw_from, entity_id_map, name_to_id_map)
+        to_id = _resolve_endpoint(raw_to, entity_id_map, name_to_id_map)
         
-        relationships.append(rel)
+        if not from_id or not to_id:
+            logger.warning(
+                "Rejected relationship [%s --(%s)--> %s]: Endpoint ungrounded (from_id=%s, to_id=%s)",
+                raw_from, rel_type, raw_to, from_id, to_id,
+            )
+            rejections_count += 1
+            continue
+            
+        # Prevent self-referential relationships if endpoints resolved to the same node
+        if from_id == to_id:
+            logger.warning("Rejected relationship [%s --(%s)--> %s]: Self-referential loop", from_id, rel_type, to_id)
+            rejections_count += 1
+            continue
+            
+        clean_rel = {
+            "from_id": from_id,
+            "to_id": to_id,
+            "rel_type": rel_type,
+            "from_type": entity_id_map[from_id],
+            "to_type": entity_id_map[to_id],
+            "properties": {
+                k: v for k, v in rel.get("properties", {}).items() if v is not None
+            }
+        }
+        relationships.append(clean_rel)
 
+    logger.info(
+        "Validation complete: %d entities accepted, %d relationships accepted (%d rejected)",
+        len(entities), len(relationships), rejections_count,
+    )
     return {"entities": entities, "relationships": relationships}
 
 
@@ -303,6 +415,8 @@ async def extract_entities_and_relationships(
     text: str,
     document_name: str = "",
     llm_client=None,
+    known_entities: Optional[dict[str, Any] | list[dict[str, Any]]] = None,
+    max_tokens: int = 1024,
 ) -> dict[str, Any]:
     """
     Extract organizational entities and relationships from text using LLM.
@@ -312,6 +426,7 @@ async def extract_entities_and_relationships(
         text: Document text chunk to extract from
         document_name: Name of the source document
         llm_client: LLM provider instance
+        known_entities: Optional dictionary or list of entities previously extracted in the document
     
     Returns:
         {"entities": [...], "relationships": [...]}
@@ -329,8 +444,8 @@ async def extract_entities_and_relationships(
         logger.debug("Invoking rule-based deterministic extractor (MockLLMProvider active)")
         return _deterministic_mock_extraction(text)
 
-    # Truncate text to avoid context overflow
-    text_sample = text[:3000]
+    # Truncate text to avoid context overflow if chunk is exceptionally large
+    text_sample = text[:4000]
 
     user_message = (
         f"Document: {document_name}\n\n"
@@ -343,19 +458,24 @@ async def extract_entities_and_relationships(
             system_prompt=EXTRACTION_SYSTEM_PROMPT,
             user_message=user_message,
             temperature=0.0,
-            max_tokens=1500,
+            max_tokens=max_tokens,
         )
 
-        # Parse JSON from response
-        # Strip markdown code blocks if present
-        cleaned = re.sub(r"```(?:json)?\n?", "", raw_response).strip()
-        cleaned = cleaned.rstrip("`").strip()
+        # Clean response and parse JSON
+        cleaned = re.sub(r"^```(?:json)?\s*", "", raw_response.strip(), flags=re.MULTILINE)
+        cleaned = re.sub(r"\s*```$", "", cleaned.strip(), flags=re.MULTILINE).strip()
+        
+        # If response still contains extra surrounding text, extract the outermost JSON object
+        if not (cleaned.startswith("{") and cleaned.endswith("}")):
+            json_match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+            if json_match:
+                cleaned = json_match.group(1).strip()
 
         data = json.loads(cleaned)
-        validated = _validate_and_clean(data)
+        validated = _validate_and_clean(data, known_entities=known_entities)
         
         logger.info(
-            "Extracted %d entities, %d relationships from '%s'",
+            "Extracted and validated %d entities, %d relationships from chunk of '%s'",
             len(validated["entities"]),
             len(validated["relationships"]),
             document_name,
@@ -363,8 +483,8 @@ async def extract_entities_and_relationships(
         return validated
 
     except json.JSONDecodeError as e:
-        logger.warning("Failed to parse LLM extraction response as JSON: %s", e)
-        return {"entities": [], "relationships": []}
+        logger.warning("Failed to parse LLM extraction response as JSON: %s. Response preview: %s", e, repr(raw_response[:200]) if 'raw_response' in locals() else "N/A")
+        raise GraphExtractionError(f"Failed to parse LLM extraction response as JSON ({type(e).__name__}): {e!r}") from e
     except Exception as e:
-        logger.error("Entity extraction failed: %s", e)
-        return {"entities": [], "relationships": []}
+        logger.exception("Entity extraction failed (%s): %r", type(e).__name__, e)
+        raise GraphExtractionError(f"Entity extraction failed ({type(e).__name__}): {e!r}") from e

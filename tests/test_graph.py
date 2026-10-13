@@ -123,21 +123,22 @@ async def test_idempotent_graph_merge_and_provenance():
     neo4j = get_neo4j()
     builder = GraphBuilder(neo4j)
     
-    # Clear existing state
-    neo4j.execute_write("MATCH (n) DETACH DELETE n")
-    
+    # Clear test nodes
+    neo4j.execute_write("MATCH (n) WHERE n.id IN ['test-arun-phase3', 'test-project-alpha-phase3', $doc_id] DETACH DELETE n", {"doc_id": TEST_DOC_ID})
+    stats_initial = neo4j.get_stats()
+
     # Extract mock elements
     extraction = {
         "entities": [
-            {"id": "arun", "type": "Employee", "name": "Arun", "properties": {"role": "Manager"}},
-            {"id": "project-alpha", "type": "Project", "name": "Project Alpha", "properties": {"status": "Active"}}
+            {"id": "test-arun-phase3", "type": "Employee", "name": "Arun", "properties": {"role": "Manager"}},
+            {"id": "test-project-alpha-phase3", "type": "Project", "name": "Project Alpha", "properties": {"status": "Active"}}
         ],
         "relationships": [
             {
-                "from_id": "arun",
+                "from_id": "test-arun-phase3",
                 "from_type": "Employee",
                 "rel_type": "MANAGES",
-                "to_id": "project-alpha",
+                "to_id": "test-project-alpha-phase3",
                 "to_type": "Project"
             }
         ]
@@ -154,15 +155,15 @@ async def test_idempotent_graph_merge_and_provenance():
     assert rel_cnt == 1
     
     # Verify node has source reference properties
-    node = neo4j.get_node_by_id("arun")
+    node = neo4j.get_node_by_id("test-arun-phase3")
     assert node is not None
     assert node["source_document_id"] == TEST_DOC_ID
     assert node["source_chunk_id"] == "chunk-0"
     
     # Verify relationship has provenance
     stats_before = neo4j.get_stats()
-    assert stats_before["total_nodes"] == 3  # Employee, Project, Document
-    assert stats_before["total_relationships"] == 3  # Employee->Project, Employee->Doc, Project->Doc
+    assert stats_before["total_nodes"] == stats_initial["total_nodes"] + 3
+    assert stats_before["total_relationships"] == stats_initial["total_relationships"] + 3
     
     # Second Ingest (Duplicate): Verify MERGE prevents duplication
     ent_cnt_dup, rel_cnt_dup = builder.ingest_extraction(
@@ -173,8 +174,11 @@ async def test_idempotent_graph_merge_and_provenance():
     )
     # Check stats did not increase
     stats_after = neo4j.get_stats()
-    assert stats_after["total_nodes"] == 3
-    assert stats_after["total_relationships"] == 3
+    assert stats_after["total_nodes"] == stats_before["total_nodes"]
+    assert stats_after["total_relationships"] == stats_before["total_relationships"]
+
+    # Clean up test nodes
+    neo4j.execute_write("MATCH (n) WHERE n.id IN ['test-arun-phase3', 'test-project-alpha-phase3', $doc_id] DETACH DELETE n", {"doc_id": TEST_DOC_ID})
 
 
 @pytest.mark.asyncio
@@ -202,50 +206,62 @@ async def test_cascading_document_deletion_cleanup():
     """6. Test cascading delete of exclusive orphan nodes on document delete."""
     neo4j = get_neo4j()
     builder = GraphBuilder(neo4j)
-    
-    # Reset Graph State
-    neo4j.execute_write("MATCH (n) DETACH DELETE n")
-    
-    # Document 1: has unique employee 'Sarah' and shared project 'Project Alpha'
+
+    doc1_id = "doc-test-cascade-1"
+    doc2_id = "doc-test-cascade-2"
+    sarah_id = "sarah-test-cascade"
+    john_id = "john-test-cascade"
+    project_id = "project-test-cascade"
+
+    # Clean only test entities if they exist
+    neo4j.execute_write(
+        "MATCH (n) WHERE n.id IN [$doc1, $doc2, $sarah, $john, $project] DETACH DELETE n",
+        {"doc1": doc1_id, "doc2": doc2_id, "sarah": sarah_id, "john": john_id, "project": project_id}
+    )
+
     doc1_extraction = {
         "entities": [
-            {"id": "sarah", "type": "Employee", "name": "Sarah", "properties": {}},
-            {"id": "project-alpha", "type": "Project", "name": "Project Alpha", "properties": {}}
+            {"id": sarah_id, "type": "Employee", "name": "Sarah", "properties": {}},
+            {"id": project_id, "type": "Project", "name": "Project Cascade", "properties": {}}
         ],
         "relationships": [
-            {"from_id": "sarah", "from_type": "Employee", "rel_type": "WORKS_IN", "to_id": "project-alpha", "to_type": "Project"}
+            {"from_id": sarah_id, "from_type": "Employee", "rel_type": "WORKS_IN", "to_id": project_id, "to_type": "Project"}
         ]
     }
-    
-    # Document 2: has unique employee 'John' and shared project 'Project Alpha'
+
     doc2_extraction = {
         "entities": [
-            {"id": "john", "type": "Employee", "name": "John", "properties": {}},
-            {"id": "project-alpha", "type": "Project", "name": "Project Alpha", "properties": {}}
+            {"id": john_id, "type": "Employee", "name": "John", "properties": {}},
+            {"id": project_id, "type": "Project", "name": "Project Cascade", "properties": {}}
         ],
         "relationships": [
-            {"from_id": "john", "from_type": "Employee", "rel_type": "WORKS_IN", "to_id": "project-alpha", "to_type": "Project"}
+            {"from_id": john_id, "from_type": "Employee", "rel_type": "WORKS_IN", "to_id": project_id, "to_type": "Project"}
         ]
     }
-    
-    builder.ingest_extraction(doc1_extraction, "doc-1", "doc1.txt")
-    builder.ingest_extraction(doc2_extraction, "doc-2", "doc2.txt")
-    
-    # Verify initial stats: 2 Doc nodes, 1 Project, 2 Employees = 5 nodes total
-    stats = neo4j.get_stats()
-    assert stats["total_nodes"] == 5
-    
+
+    builder.ingest_extraction(doc1_extraction, doc1_id, "doc1.txt")
+    builder.ingest_extraction(doc2_extraction, doc2_id, "doc2.txt")
+
+    # Verify both documents ingested
+    assert neo4j.get_node_by_id(sarah_id) is not None
+    assert neo4j.get_node_by_id(john_id) is not None
+    assert neo4j.get_node_by_id(project_id) is not None
+
     # Delete Document 1
-    builder.delete_document_graph("doc-1")
-    
+    builder.delete_document_graph(doc1_id)
+
     # Verify cascading outcomes:
-    # - 'doc-1' node is deleted.
-    # - 'sarah' node (exclusive to doc-1) is deleted.
-    # - 'john' node (exclusive to doc-2) is preserved.
-    # - 'project-alpha' (shared with doc-2) is preserved!
-    assert neo4j.get_node_by_id("sarah") is None
-    assert neo4j.get_node_by_id("john") is not None
-    assert neo4j.get_node_by_id("project-alpha") is not None
-    
-    stats_after = neo4j.get_stats()
-    assert stats_after["total_nodes"] == 3  # John, Project Alpha, doc-2
+    # - doc1_id node is deleted.
+    # - sarah_id node (exclusive to doc1) is deleted.
+    # - john_id node (exclusive to doc2) is preserved.
+    # - project_id (shared with doc2) is preserved!
+    assert neo4j.get_node_by_id(doc1_id) is None
+    assert neo4j.get_node_by_id(sarah_id) is None
+    assert neo4j.get_node_by_id(john_id) is not None
+    assert neo4j.get_node_by_id(project_id) is not None
+
+    # Clean up test nodes
+    neo4j.execute_write(
+        "MATCH (n) WHERE n.id IN [$doc1, $doc2, $sarah, $john, $project] DETACH DELETE n",
+        {"doc1": doc1_id, "doc2": doc2_id, "sarah": sarah_id, "john": john_id, "project": project_id}
+    )

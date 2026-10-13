@@ -118,8 +118,9 @@ class GraphStatsResponse(BaseModel):
 
 
 class GraphSearchRequest(BaseModel):
-    query: str
+    query: str = ""
     node_types: Optional[List[str]] = None
+    limit: Optional[int] = 100
 
 
 @router.post("/search", response_model=GraphSearchResponse)
@@ -130,13 +131,16 @@ async def search_graph_entities(
     """Search for matching nodes in the Neo4j knowledge graph with user isolation."""
     neo4j = get_neo4j()
     user_id = current_user.id if current_user.role != UserRole.ADMIN else None
-    nodes = neo4j.search_entities(query=req.query, node_types=req.node_types, user_id=user_id)
+    search_limit = req.limit if req.limit and req.limit > 0 else 100
+    nodes = neo4j.search_entities(query=req.query, node_types=req.node_types, user_id=user_id, limit=search_limit)
     
-    # Exclude document nodes if they are present or filter properly
+    # Exclude document nodes to show only semantic entities
     response_nodes = []
     for n in nodes:
         types = n.get("_types", ["Entity"])
         node_type = types[0] if types else "Entity"
+        if node_type == "Document":
+            continue
         name = n.get("name", n.get("id", ""))
         response_nodes.append(
             GraphNode(

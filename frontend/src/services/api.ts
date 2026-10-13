@@ -42,9 +42,12 @@ export interface HealthStatus {
   status: string;
   service: string;
   version: string;
+  llm_provider?: string;
+  llm_model?: string;
+  embedding_model?: string;
   timestamp: string;
   uptime_seconds: number;
-  services: Record<string, { status: string }>;
+  services: Record<string, { status: string; optional?: boolean }>;
 }
 
 export const checkHealth = async (): Promise<HealthStatus> => {
@@ -186,8 +189,8 @@ export const getGraphNeighbors = async (id: string, allowedRelations?: string): 
   return response.data;
 };
 
-export const searchGraphEntities = async (query: string, nodeTypes?: string[]): Promise<{ entities: GraphNode[] }> => {
-  const response = await api.post<{ entities: GraphNode[] }>('/api/graph/search', { query, node_types: nodeTypes });
+export const searchGraphEntities = async (query = '', nodeTypes?: string[], limit = 100): Promise<{ entities: GraphNode[] }> => {
+  const response = await api.post<{ entities: GraphNode[] }>('/api/graph/search', { query, node_types: nodeTypes, limit });
   return response.data;
 };
 

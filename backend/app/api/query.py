@@ -65,10 +65,19 @@ async def ask_question(
     session.add(db_query)
 
     # Save source citations to PostgreSQL
+    from app.models.document import Document
     for s in response.sources:
+        doc_id = None
+        if s.document_id:
+            doc_check = await session.execute(
+                select(Document.id).where(Document.id == s.document_id)
+            )
+            if doc_check.scalar_one_or_none():
+                doc_id = s.document_id
+
         db_source = QuerySource(
             query_id=response.query_id,
-            document_id=s.document_id,
+            document_id=doc_id,
             document_name=s.document_name,
             chunk_id=s.chunk_id,
             chunk_text=s.text,

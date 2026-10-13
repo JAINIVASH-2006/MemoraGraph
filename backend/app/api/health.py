@@ -30,8 +30,9 @@ async def liveness_check():
 async def health_check():
     """
     Returns system health status, version, and uptime.
-    Performs concurrent connectivity checks for PostgreSQL, Neo4j, and Qdrant
-    with strict timeouts to ensure response time is under 1.5 seconds.
+    Performs concurrent connectivity checks for PostgreSQL, Neo4j, Qdrant,
+    and Ollama (optional) with strict timeouts to ensure response time is
+    under 2 seconds.
     """
     from app.config import settings
     from app.models.database import ping_db
@@ -64,25 +65,32 @@ async def health_check():
             logger.debug("Qdrant health check timeout/error: %s", e)
             return False
 
-    # Run all database pings concurrently
-    postgres_ok, neo4j_ok, qdrant_ok = await asyncio.gather(
+    async def check_ollama() -> bool:
+        """Optional check — does not affect overall health status."""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=1.5) as client:
+                resp = await client.get(f"{settings.ollama_base_url}/api/tags")
+                return resp.status_code == 200
+        except Exception as e:
+            logger.debug("Ollama health check timeout/error: %s", e)
+            return False
+
+    # Run all checks concurrently
+    postgres_ok, neo4j_ok, qdrant_ok, ollama_ok = await asyncio.gather(
         check_postgres(),
         check_neo4j(),
         check_qdrant(),
+        check_ollama(),
         return_exceptions=True,
     )
 
     postgres_ok = postgres_ok is True
     neo4j_ok = neo4j_ok is True
     qdrant_ok = qdrant_ok is True
+    ollama_ok = ollama_ok is True  # informational only
 
-    services_status = {
-        "backend": "up",
-        "postgres": "up" if postgres_ok else "down",
-        "neo4j": "up" if neo4j_ok else "down",
-        "qdrant": "up" if qdrant_ok else "down",
-    }
-
+    # Ollama is optional — not required for core health
     overall = "healthy"
     if not postgres_ok or not neo4j_ok or not qdrant_ok:
         overall = "degraded"
@@ -91,10 +99,16 @@ async def health_check():
         "status": overall,
         "service": settings.app_name,
         "version": settings.app_version,
+        "llm_provider": settings.llm_provider,
+        "llm_model": settings.llm_model,
+        "embedding_model": settings.embedding_model,
         "timestamp": now.isoformat(),
         "uptime_seconds": round(uptime_seconds, 1),
         "services": {
-            k: {"status": v} for k, v in services_status.items()
+            "backend": {"status": "up"},
+            "postgres": {"status": "up" if postgres_ok else "down"},
+            "neo4j": {"status": "up" if neo4j_ok else "down"},
+            "qdrant": {"status": "up" if qdrant_ok else "down"},
+            "ollama": {"status": "up" if ollama_ok else "unavailable", "optional": True},
         },
     }
-

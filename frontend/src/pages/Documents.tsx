@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { FormEvent } from 'react';
 import { Upload, Trash2, Search, File, Loader, Database, CheckCircle, AlertCircle, Clock } from 'lucide-react';
 import { uploadDocument, getDocuments, deleteDocument } from '../services/api';
@@ -14,17 +14,41 @@ export default function Documents() {
   const [department, setDepartment] = useState('');
   const [project, setProject] = useState('');
   const [dragOver, setDragOver] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const fetchPromise = useRef<Promise<void> | null>(null);
+  const fetchVersion = useRef(0);
+  const deletingRef = useRef(false);
 
-  const fetchDocs = async () => {
-    setLoading(true);
+  const fetchDocs = async (force = false) => {
+    if (fetchPromise.current) {
+      if (!force) return fetchPromise.current;
+      await fetchPromise.current;
+    }
+
+    const requestVersion = ++fetchVersion.current;
+    const request = (async () => {
+      setLoading(true);
+      try {
+        const data = await getDocuments(query, undefined, 1, 100);
+        if (requestVersion === fetchVersion.current) {
+          setDocs(data.documents);
+          setTotal(data.total);
+        }
+      } catch (err) {
+        console.error('Error fetching docs:', err);
+        if (requestVersion === fetchVersion.current) {
+          setErrorMessage('Unable to refresh the document list. Please try again.');
+        }
+      } finally {
+        setLoading(false);
+      }
+    })();
+    fetchPromise.current = request;
     try {
-      const data = await getDocuments(query, undefined, 1, 100);
-      setDocs(data.documents);
-      setTotal(data.total);
-    } catch (err) {
-      console.error('Error fetching docs:', err);
+      await request;
     } finally {
-      setLoading(false);
+      if (fetchPromise.current === request) fetchPromise.current = null;
     }
   };
 
@@ -51,9 +75,9 @@ export default function Documents() {
       setFile(null);
       setDepartment('');
       setProject('');
-      fetchDocs();
+      await fetchDocs();
     } catch (err: any) {
-      alert(`Upload failed: ${err.response?.data?.detail || err.message}`);
+      setErrorMessage(`Upload failed: ${err.response?.data?.detail || err.message}`);
     } finally {
       setUploading(false);
     }
@@ -61,11 +85,20 @@ export default function Documents() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this document? All vector indexes and graph nodes linked will be removed.')) return;
+    if (deletingRef.current) return;
+    deletingRef.current = true;
+    setErrorMessage(null);
+    setDeletingId(id);
+    fetchVersion.current += 1;
     try {
       await deleteDocument(id);
-      fetchDocs();
-    } catch (err) {
+      await fetchDocs(true);
+    } catch (err: any) {
       console.error('Failed to delete document:', err);
+      setErrorMessage(`Delete failed: ${err.response?.data?.detail || err.message || 'The server did not confirm deletion.'}`);
+    } finally {
+      deletingRef.current = false;
+      setDeletingId(null);
     }
   };
 
@@ -86,6 +119,11 @@ export default function Documents() {
 
   return (
     <div className="page">
+      {errorMessage && (
+        <div role="alert" style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 8, color: 'var(--color-rose)', background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.2)', fontSize: 13 }}>
+          {errorMessage}
+        </div>
+      )}
       <div className="page-header">
         <div>
           <h1 className="page-title">Document Corpus Management</h1>
@@ -217,6 +255,11 @@ export default function Documents() {
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: s.bg, color: s.color, border: `1px solid ${s.border}` }}>
                             {s.icon} {doc.status}
                           </span>
+                          {doc.status === 'FAILED' && doc.error_message && (
+                            <div style={{ maxWidth: 280, marginTop: 6, color: 'var(--color-rose)', fontSize: 11 }}>
+                              {doc.error_message}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '14px 12px', fontWeight: 600, color: 'var(--color-text-primary)' }}>{doc.chunk_count}</td>
                         <td style={{ padding: '14px 12px', fontWeight: 600, color: 'var(--color-accent)' }}>{doc.entity_count}</td>
@@ -224,6 +267,7 @@ export default function Documents() {
                         <td style={{ padding: '14px 12px', textAlign: 'right' }}>
                           <button
                             onClick={() => handleDelete(doc.id)}
+                            disabled={deletingId !== null}
                             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 6, borderRadius: 6, color: 'var(--color-text-muted)', transition: 'color 0.15s' }}
                             onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--color-rose)'}
                             onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--color-text-muted)'}

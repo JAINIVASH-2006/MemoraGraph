@@ -229,27 +229,44 @@ export default function Assistant() {
 
           {/* Metadata */}
           <div style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', borderRadius: 10, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {[
-              { label: 'Query Intent', value: selectedResult.intent, highlight: true },
-              { label: 'Classifier Confidence', value: `${(selectedResult.intent_confidence * 100).toFixed(0)}%` },
-              { label: 'Retrieval Mode', value: selectedResult.retrieval_mode?.replace('_', ' ') || 'Intent Routed' },
-              { label: 'Answer Groundedness', value: `${(selectedResult.confidence * 100).toFixed(0)}%`, green: true },
-              ...(selectedResult.latency_ms !== undefined ? [{ label: 'Pipeline Latency', value: `${selectedResult.latency_ms.toFixed(0)} ms` }] : []),
-            ].map((row, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
-                <span style={{ color: 'var(--color-text-secondary)' }}>{row.label}:</span>
-                <span style={{
-                  fontWeight: 600,
-                  color: row.green ? 'var(--color-emerald)' : row.highlight ? 'var(--color-accent)' : 'var(--color-text-primary)',
-                  background: row.highlight ? 'rgba(99,102,241,0.08)' : undefined,
-                  padding: row.highlight ? '2px 8px' : undefined,
-                  borderRadius: row.highlight ? 6 : undefined,
-                  border: row.highlight ? '1px solid rgba(99,102,241,0.2)' : undefined,
-                }}>
-                  {row.value}
-                </span>
-              </div>
-            ))}
+            {(() => {
+              const meta = selectedResult.retrieval_metadata || {};
+              const nodesCount = meta.graph_nodes_retrieved ?? (selectedResult.graph_paths ? new Set(selectedResult.graph_paths.flatMap(p => p.nodes.map(n => n.id))).size : 0);
+              const edgesCount = meta.graph_edges_traversed ?? (selectedResult.graph_paths ? selectedResult.graph_paths.reduce((acc, p) => acc + (p.edges?.length || 0), 0) : 0);
+              const modelUsed = meta.llm_model || 'qwen3:1.7b';
+              const retrievalLatency = meta.retrieval_time_ms != null ? `${meta.retrieval_time_ms.toFixed(1)} ms` : null;
+              const generationLatency = meta.generation_time_ms != null ? `${meta.generation_time_ms.toFixed(1)} ms` : null;
+              const totalLatency = meta.total_time_ms != null ? `${meta.total_time_ms.toFixed(1)} ms` : (selectedResult.latency_ms != null ? `${selectedResult.latency_ms.toFixed(1)} ms` : null);
+
+              const rows = [
+                { label: 'Query Intent', value: selectedResult.intent, highlight: true },
+                { label: 'Classifier Confidence', value: `${(selectedResult.intent_confidence * 100).toFixed(0)}%` },
+                { label: 'Retrieval Mode', value: selectedResult.retrieval_mode?.replace('_', ' ') || 'Intent Routed' },
+                { label: 'Model Used', value: modelUsed },
+                { label: 'Graph Nodes Retrieved', value: `${nodesCount}` },
+                { label: 'Graph Edges Traversed', value: `${edgesCount}` },
+                ...(retrievalLatency ? [{ label: 'Retrieval Latency', value: retrievalLatency }] : []),
+                ...(generationLatency ? [{ label: 'Generation Latency', value: generationLatency }] : []),
+                ...(totalLatency ? [{ label: 'Total Latency', value: totalLatency }] : []),
+                { label: 'Answer Groundedness', value: `${(selectedResult.confidence * 100).toFixed(0)}%`, green: true },
+              ];
+
+              return rows.map((row, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                  <span style={{ color: 'var(--color-text-secondary)' }}>{row.label}:</span>
+                  <span style={{
+                    fontWeight: 600,
+                    color: row.green ? 'var(--color-emerald)' : row.highlight ? 'var(--color-accent)' : 'var(--color-text-primary)',
+                    background: row.highlight ? 'rgba(99,102,241,0.08)' : undefined,
+                    padding: row.highlight ? '2px 8px' : undefined,
+                    borderRadius: row.highlight ? 6 : undefined,
+                    border: row.highlight ? '1px solid rgba(99,102,241,0.2)' : undefined,
+                  }}>
+                    {row.value}
+                  </span>
+                </div>
+              ));
+            })()}
           </div>
 
           {/* Graph Paths */}

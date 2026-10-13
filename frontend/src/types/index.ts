@@ -13,6 +13,7 @@ export interface Document {
   original_filename: string;
   file_type: string;
   status: 'UPLOADED' | 'PROCESSING' | 'PROCESSED' | 'FAILED';
+  error_message?: string;
   chunk_count: number;
   entity_count: number;
   relationship_count: number;
@@ -30,6 +31,20 @@ export interface EvidenceItem {
   score: number;
 }
 
+export interface RetrievalMetadata {
+  vector_chunks_retrieved?: number;
+  graph_nodes_retrieved?: number;
+  graph_edges_traversed?: number;
+  retrieval_time_ms?: number;
+  generation_time_ms?: number;
+  total_time_ms?: number;
+  llm_model?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  fallback_used?: boolean;
+  [key: string]: unknown;
+}
+
 export interface QueryResult {
   query_id?: string;
   answer: string;
@@ -41,7 +56,7 @@ export interface QueryResult {
   intent_confidence: number;
   retrieval_mode?: string;
   latency_ms?: number;
-  retrieval_metadata: Record<string, unknown>;
+  retrieval_metadata: RetrievalMetadata;
 }
 
 export interface Source {
@@ -75,6 +90,7 @@ export interface GraphEdge {
 
 export interface AnalyticsOverview {
   total_documents: number;
+  total_chunks?: number;
   total_entities: number;
   total_relationships: number;
   total_queries: number;
@@ -104,12 +120,18 @@ export interface EvaluationReport {
   message?: string;
   dataset_type?: string;
   total_samples_evaluated?: number;
+  mode?: string;
   metrics?: {
     'Precision@1'?: MetricStat;
     'Precision@5'?: MetricStat;
+    'Recall@5'?: MetricStat;
+    'F1@5'?: MetricStat;
     'PathPrecision@5'?: MetricStat;
-    'AnswerRecall'?: MetricStat;
     'IntentAccuracy'?: MetricStat;
+    'TotalRetrievalLatency_ms'?: MetricStat;
+    'VectorRetrievalLatency_ms'?: MetricStat;
+    'GraphRetrievalLatency_ms'?: MetricStat;
+    'AnswerRecall'?: MetricStat;
     'Latency_ms'?: MetricStat;
     [key: string]: MetricStat | undefined;
   };

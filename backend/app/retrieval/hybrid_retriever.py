@@ -116,15 +116,34 @@ class HybridRetriever:
             candidates.add(f"Project {proj_match.group(1)}")
             candidates.add(proj_match.group(1))
 
-        # Heuristic 4: Get metadata entities (projects/departments) from top vector search results
+        # Heuristic 3b: Explicit Incident / Decision / Action IDs (e.g. INC-301, DEC-101, ACT-201)
+        entity_ids = re.findall(r"\b([A-Z]{2,5}-\d{2,5})\b", query)
+        for eid in entity_ids:
+            candidates.add(eid)
+
+        # Heuristic 4: Get metadata entities (projects/departments) from top vector search results.
+        # Guardrail: Do NOT add unrelated projects if the query specifically targeted a named project or incident ID!
+        query_lower = query.lower()
+        has_specific_project = bool(proj_match)
+        has_specific_id = bool(entity_ids)
+
         for r in vector_results:
             meta = r.metadata
-            if meta.get("project"):
-                candidates.add(meta["project"])
-            if meta.get("department"):
-                candidates.add(meta["department"])
-            if meta.get("author"):
-                candidates.add(meta["author"])
+            proj = meta.get("project")
+            if proj:
+                # If query specifically targets a project or ID, only add if it matches target project or is in query
+                if not has_specific_project and not has_specific_id:
+                    candidates.add(proj)
+                elif proj.lower() in query_lower or (proj_match and proj_match.group(1).lower() in proj.lower()):
+                    candidates.add(proj)
+
+            dept = meta.get("department")
+            if dept and (not has_specific_project or dept.lower() in query_lower):
+                candidates.add(dept)
+
+            author = meta.get("author")
+            if author and (not has_specific_project or author.lower() in query_lower):
+                candidates.add(author)
 
         candidate_list = list(candidates)
         logger.debug("Extracted seed candidates for graph: %s", candidate_list)

@@ -105,23 +105,52 @@ class GeminiProvider(LLMProvider):
         system_prompt: str,
         user_message: str,
         temperature: float = 0.1,
-        max_tokens: int = 2048,
+        max_tokens: int = 4096,
     ) -> str:
         import asyncio
+        # Detect if JSON output is requested
+        is_json = "json" in system_prompt.lower() or "json" in user_message.lower()
+        
+        gen_kwargs = {
+            "temperature": temperature,
+            "max_output_tokens": max(max_tokens, 4096),
+        }
+        if is_json:
+            gen_kwargs["response_mime_type"] = "application/json"
+            
+        generation_config = self._genai.GenerationConfig(**gen_kwargs)
+        
         model = self._genai.GenerativeModel(
             model_name=self.model,
             system_instruction=system_prompt,
-            generation_config=self._genai.GenerationConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-            ),
+            generation_config=generation_config,
         )
         # Run sync Gemini in thread pool
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None, lambda: model.generate_content(user_message)
-        )
-        return response.text or ""
+        try:
+            response = await loop.run_in_executor(
+                None, lambda: model.generate_content(user_message)
+            )
+        except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower() or "resource_exhausted" in str(e).lower():
+                logger.warning("Gemini rate limit / quota exceeded (%s). Falling back to MockLLMProvider.", e)
+                return await MockLLMProvider(model=self.model).complete(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            raise
+
+        try:
+            return response.text or ""
+        except Exception as e:
+            logger.warning("Could not access response.text directly: %s. Inspecting candidates.", e)
+            if response.candidates:
+                candidate = response.candidates[0]
+                text_parts = [p.text for p in candidate.content.parts if hasattr(p, "text")]
+                return "".join(text_parts)
+            return ""
 
     async def ping(self) -> bool:
         try:
@@ -168,10 +197,24 @@ class OllamaProvider(LLMProvider):
     """Local Ollama provider (no API key needed)."""
 
     def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama3"):
-        import httpx
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=120)
+        self.base_url = base_url
         self.model = model
+        self._client = None
+        self._client_loop = None
         logger.info("Ollama provider initialized. Model: %s, URL: %s", model, base_url)
+
+    @property
+    def client(self):
+        import asyncio
+        import httpx
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if self._client is None or self._client.is_closed or self._client_loop != loop:
+            self._client = httpx.AsyncClient(base_url=self.base_url, timeout=120)
+            self._client_loop = loop
+        return self._client
 
     async def complete(
         self,
@@ -180,6 +223,13 @@ class OllamaProvider(LLMProvider):
         temperature: float = 0.1,
         max_tokens: int = 2048,
     ) -> str:
+        # Detect if JSON output is requested
+        is_json = "json" in system_prompt.lower() or "json" in user_message.lower()
+
+        # If concise output is requested, tell Qwen3 to skip reasoning
+        if max_tokens <= 512 and "qwen" in self.model.lower():
+            system_prompt += "\nRespond directly to the user's question. Do not use internal reasoning, thinking, or <think> blocks."
+
         payload = {
             "model": self.model,
             "messages": [
@@ -187,16 +237,47 @@ class OllamaProvider(LLMProvider):
                 {"role": "user", "content": user_message},
             ],
             "stream": False,
+            "think": False,
+            "keep_alive": -1,
             "options": {"temperature": temperature, "num_predict": max_tokens},
         }
-        response = await self._client.post("/api/chat", json=payload)
-        response.raise_for_status()
-        data = response.json()
-        return data.get("message", {}).get("content", "")
+        if is_json:
+            payload["format"] = "json"
+
+        try:
+            response = await self.client.post("/api/chat", json=payload)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as e:
+            logger.warning("Ollama connection or request failed: %s. Falling back to MockLLMProvider for offline execution.", e)
+            mock = MockLLMProvider(model=self.model)
+            return await mock.complete(system_prompt, user_message, temperature, max_tokens)
+        self.last_prompt_tokens = data.get("prompt_eval_count")
+        self.last_completion_tokens = data.get("eval_count")
+        content = data.get("message", {}).get("content", "")
+        # If model emitted thinking ending with </think>, extract the clean answer
+        if "</think>" in content:
+            content = content.split("</think>")[-1].strip()
+        elif not content and "thinking" in data.get("message", {}):
+            thinking = data["message"]["thinking"].strip()
+            logger.warning("Ollama message content was empty; model was truncated during thinking.")
+            if "</think>" in thinking:
+                content = thinking.split("</think>")[-1].strip()
+            elif "\n\n" in thinking:
+                content = thinking.split("\n\n")[-1].strip()
+            else:
+                content = thinking
+        return content
+
+    def get_last_token_usage(self) -> dict:
+        return {
+            "prompt_tokens": getattr(self, "last_prompt_tokens", None),
+            "completion_tokens": getattr(self, "last_completion_tokens", None),
+        }
 
     async def ping(self) -> bool:
         try:
-            response = await self._client.get("/api/tags")
+            response = await self.client.get("/api/tags")
             return response.status_code == 200
         except Exception:
             return False
@@ -277,9 +358,12 @@ def create_llm_provider(
     elif provider == "anthropic":
         return AnthropicProvider(api_key=api_key or "", model=model)
     elif provider == "ollama":
-        return OllamaProvider(model=model)
+        from app.config import settings
+        return OllamaProvider(base_url=settings.ollama_base_url, model=model)
+    elif provider == "mock":
+        return MockLLMProvider(model=model)
     else:
-        raise ValueError(f"Unknown LLM provider: {provider}. Supported: openai, gemini, anthropic, ollama")
+        raise ValueError(f"Unknown LLM provider: {provider}. Supported: openai, gemini, anthropic, ollama, mock")
 
 
 def init_llm_provider(provider: str, api_key: Optional[str], model: str) -> LLMProvider:

@@ -26,7 +26,6 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
-import defaultEvalReport from '../data/defaultEvaluationReport.json';
 import { getAnalyticsOverview, getEvaluationReport } from '../services/api';
 import type { AnalyticsOverview, EvaluationReport } from '../types';
 
@@ -34,7 +33,7 @@ const COLORS = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b'];
 
 export default function Analytics() {
   const [data, setData] = useState<AnalyticsOverview | null>(null);
-  const [evalData, setEvalData] = useState<EvaluationReport>(defaultEvalReport as EvaluationReport);
+  const [evalData, setEvalData] = useState<EvaluationReport | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -50,8 +49,10 @@ export default function Analytics() {
     ])
       .then(([overview, evaluation]) => {
         if (overview) setData(overview);
-        if (evaluation && evaluation.metrics && Object.keys(evaluation.metrics).length > 0) {
+        if (evaluation && evaluation.available && evaluation.metrics && Object.keys(evaluation.metrics).length > 0) {
           setEvalData(evaluation);
+        } else {
+          setEvalData(null);
         }
       })
       .finally(() => setLoading(false));
@@ -77,13 +78,13 @@ export default function Analytics() {
     ? [
         {
           label: 'Total Chunks',
-          value: data.total_documents * 5,
+          value: data.total_chunks != null && data.total_chunks > 0 ? data.total_chunks : 'N/A',
           icon: <Database size={20} />,
           color: 'var(--color-blue)',
         },
         {
-          label: 'Avg Latency',
-          value: `${data.avg_retrieval_time_ms} ms`,
+          label: 'Avg Live Latency',
+          value: data.total_queries > 0 ? `${data.avg_retrieval_time_ms} ms` : 'N/A (No queries yet)',
           icon: <Activity size={20} />,
           color: 'var(--color-purple)',
         },
@@ -94,7 +95,7 @@ export default function Analytics() {
           color: 'var(--color-emerald)',
         },
         {
-          label: 'Total Queries Run',
+          label: 'Total Live Queries',
           value: data.total_queries,
           icon: <HelpCircle size={20} />,
           color: 'var(--color-amber)',
@@ -125,22 +126,22 @@ export default function Analytics() {
           color: '#3b82f6',
         },
         {
-          key: 'AnswerRecall',
-          name: 'Answer Recall',
-          description: 'Ground-truth knowledge coverage in generation',
-          stat: evalData.metrics['AnswerRecall'],
+          key: 'Recall@5',
+          name: 'Document Recall @ 5',
+          description: 'Relevant organizational document coverage',
+          stat: evalData.metrics['Recall@5'],
           format: 'percent',
           icon: <Award size={18} />,
           color: '#10b981',
         },
         {
-          key: 'IntentAccuracy',
-          name: 'Intent Accuracy',
-          description: 'Zero-shot Cypher/vector query routing accuracy',
-          stat: evalData.metrics['IntentAccuracy'],
+          key: 'F1@5',
+          name: 'Retrieval F1 @ 5',
+          description: 'Harmonic mean of precision and recall @ K=5',
+          stat: evalData.metrics['F1@5'],
           format: 'percent',
-          icon: <CheckCircle2 size={18} />,
-          color: '#8b5cf6',
+          icon: <Award size={18} />,
+          color: '#059669',
         },
         {
           key: 'PathPrecision@5',
@@ -152,13 +153,42 @@ export default function Analytics() {
           color: '#ec4899',
         },
         {
-          key: 'Latency_ms',
-          name: 'End-to-End Latency',
-          description: 'Hybrid retrieval + synthesis execution time',
-          stat: evalData.metrics['Latency_ms'],
+          key: 'IntentAccuracy',
+          name: 'Intent Accuracy',
+          description: 'Zero-shot Cypher/vector query routing accuracy',
+          stat: evalData.metrics['IntentAccuracy'],
+          format: 'percent',
+          icon: <CheckCircle2 size={18} />,
+          color: '#8b5cf6',
+        },
+        {
+          key: 'TotalRetrievalLatency_ms',
+          name: 'Retrieval Latency',
+          description: 'Vector search + graph traversal time (Zero LLM)',
+          stat: evalData.metrics['TotalRetrievalLatency_ms'] || evalData.metrics['Latency_ms'],
           format: 'ms',
           icon: <Clock size={18} />,
           color: '#f59e0b',
+        },
+        {
+          key: 'AnswerRecall',
+          name: 'Answer Recall',
+          description: 'Ground-truth knowledge coverage in generation',
+          stat: evalData.metrics['AnswerRecall'],
+          format: 'percent',
+          icon: <Award size={18} />,
+          color: '#64748b',
+          unavailableNote: 'N/A (Requires answer-quality mode)',
+        },
+        {
+          key: 'EndToEndLatency',
+          name: 'End-to-End Latency',
+          description: 'Full query generation latency on current LLM',
+          stat: undefined,
+          format: 'ms',
+          icon: <Clock size={18} />,
+          color: '#64748b',
+          unavailableNote: 'N/A (Decoupled in retrieval benchmark)',
         },
       ]
     : [];
@@ -409,7 +439,7 @@ export default function Analytics() {
                         ? isPercent
                           ? `${(m.stat.mean * 100).toFixed(1)}%`
                           : `${m.stat.mean.toFixed(1)} ms`
-                        : '—';
+                        : (m as any).unavailableNote || 'N/A';
                       const stdVal = m.stat
                         ? `±${isPercent ? (m.stat.std * 100).toFixed(1) + '%' : m.stat.std.toFixed(1) + 'ms'}`
                         : '';
@@ -472,7 +502,7 @@ export default function Analytics() {
 
                           <div>
                             <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                              <span style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                              <span style={{ fontSize: meanVal.length > 8 ? 14 : 24, fontWeight: 700, color: m.stat ? 'var(--color-text-primary)' : 'var(--color-text-muted)' }}>
                                 {meanVal}
                               </span>
                               {stdVal && (

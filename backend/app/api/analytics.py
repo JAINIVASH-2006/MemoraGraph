@@ -13,7 +13,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_session
-from app.models.document import Document
+from app.models.document import Document, DocumentChunk
 from app.models.query import Query
 from app.graph.neo4j_client import get_neo4j
 from app.models.user import User
@@ -41,6 +41,12 @@ async def get_analytics_overview(
     doc_res = await session.execute(doc_count_stmt)
     total_docs = doc_res.scalar() or 0
 
+    chunk_count_stmt = select(func.count(DocumentChunk.id))
+    if not is_admin:
+        chunk_count_stmt = chunk_count_stmt.join(Document, DocumentChunk.document_id == Document.id).where(Document.uploaded_by == current_user.id)
+    chunk_res = await session.execute(chunk_count_stmt)
+    total_chunks = chunk_res.scalar() or 0
+
     query_count_stmt = select(func.count(Query.id))
     if not is_admin:
         query_count_stmt = query_count_stmt.where(Query.user_id == current_user.id)
@@ -67,6 +73,7 @@ async def get_analytics_overview(
 
     return AnalyticsOverview(
         total_documents=total_docs,
+        total_chunks=total_chunks,
         total_entities=total_nodes,
         total_relationships=total_rels,
         total_queries=total_queries,
